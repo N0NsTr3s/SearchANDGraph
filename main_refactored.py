@@ -253,6 +253,7 @@ async def main():
     logger.info(f"Parallel NLP: {config.nlp.parallel_processing}")
     logger.info(f"Confidence scoring: {config.nlp.enable_confidence_scoring}")
     logger.info(f"Multi-source discovery: {config.crawler.multi_source_discovery}")
+    logger.info(f"Phase 2 enabled: {getattr(config.crawler, 'enable_phase2', True)}")
     
     # Graph configuration
     distance_info = f"{config.graph.max_query_distance} hops" if config.graph.max_query_distance else "unlimited"
@@ -534,8 +535,9 @@ async def main():
             logger.info(f"  Phase 2 budget: {phase2_max} pages {'(unlimited)' if phase2_max == 0 else ''}")
             logger.info(f"  High-value entities to explore: {len(high_value_entities)}")
             
-            # Check if Phase 2 should run
+            # Check if Phase 2 should run. Requires config flag plus budget and entities.
             should_run_phase2 = (
+                getattr(config.crawler, 'enable_phase2', True) and
                 len(high_value_entities) > 0 and
                 (phase2_max == 0 or phase2_pages_crawled < phase2_max)
             )
