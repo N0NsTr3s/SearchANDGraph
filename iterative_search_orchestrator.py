@@ -6,6 +6,7 @@ from typing import List, Dict, Set, Optional, Tuple, Any, TYPE_CHECKING
 from dataclasses import dataclass
 import asyncio
 from collections import Counter
+import re
 
 from advanced_search import SearchQuery, AdvancedSearchBuilder
 from logger import setup_logger
@@ -194,17 +195,39 @@ class IterativeSearchOrchestrator:
         Returns:
             List of (url, title, source, score) tuples above min_relevance_score
         """
-        scored = []
-        query_lower = query.lower()
-        query_words = set(query_lower.split())
+        scored: List[Tuple[str, str, str, float]] = []
+
+        # Normalize query terms: SearchQuery.query often includes quotes/operators.
+        # Using raw .split() produces tokens like '"csm"' which will never match titles.
+        query_lower = (query or "").lower()
+        raw_tokens = re.findall(r"[\w\-]+", query_lower)
+        stop = {
+            'the', 'and', 'or', 'for', 'with', 'from', 'about', 'this', 'that',
+            'what', 'when', 'where', 'how', 'filetype', 'pdf', 'doc', 'docx',
+            'official', 'reports', 'analysis', 'relationship', 'influence', 'on'
+        }
+        query_tokens = {t for t in raw_tokens if len(t) >= 3 and t not in stop}
         
         for url, title, source in urls:
-            title_lower = title.lower()
-            
-            # Calculate relevance score based on keyword matches
-            matches = sum(1 for word in query_words if word in title_lower)
-            score = matches / max(len(query_words), 1)
-            
+            title_lower = (title or '').lower()
+            url_lower = (url or '').lower()
+
+            # If we couldn't extract meaningful tokens, treat results as relevant.
+            if not query_tokens:
+                scored.append((url, title, source, 1.0))
+                continue
+
+            # Require at least one token hit in the title to reduce noise.
+            title_matches = sum(1 for token in query_tokens if token in title_lower)
+            if title_matches == 0:
+                continue
+
+            url_matches = sum(1 for token in query_tokens if token in url_lower)
+
+            # Weight title matches higher than URL matches.
+            weighted = (2.0 * title_matches) + (1.0 * url_matches)
+            score = weighted / max((2.0 * len(query_tokens)), 1.0)
+
             if score >= self.min_relevance_score:
                 scored.append((url, title, source, score))
         

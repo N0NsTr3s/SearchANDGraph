@@ -7,7 +7,12 @@ import math
 from typing import Dict, List, Optional, Tuple
 
 import networkx as nx
+import json
+from pathlib import Path
+from urllib.parse import urlparse
+
 from bokeh.layouts import column, row
+from bokeh.events import DocumentReady
 from bokeh.models import (
     Button, CheckboxGroup, ColumnDataSource, CustomJS, Div, 
     HoverTool, Range1d, RangeSlider, Select, Slider, TapTool, TextInput
@@ -124,7 +129,25 @@ class GraphVisualizer:
         self._add_node_hover(plot, prepared_graph, graph_renderer)
         
         # Add edge interaction (hover and click with pinning)
-        pinned_panel = self._add_edge_interaction(plot, prepared_graph, graph_renderer)
+        pinned_panel, documents_index = self._add_edge_interaction(plot, prepared_graph, graph_renderer)
+
+        # Also include locally downloaded PDFs (even if they aren't linked to a specific edge yet).
+        try:
+            scan_dir = Path(self.config.output_file).resolve().parent
+            downloads_dir = scan_dir / "downloads"
+            if downloads_dir.exists():
+                for pdf_path in downloads_dir.rglob("*.pdf"):
+                    try:
+                        file_url = pdf_path.resolve().as_uri()
+                    except Exception:
+                        continue
+                    if file_url not in documents_index:
+                        documents_index[file_url] = {
+                            'connections': [],
+                            'nodes': [],
+                        }
+        except Exception:
+            pass
 
         # === Welcome Pop-up (will be shown on page load) ===
         welcome_popup = Div(
@@ -141,13 +164,24 @@ class GraphVisualizer:
                 justify-content: center;
                 align-items: center;
             ">
-                <div style="
+                <div id="welcome-panel" style="
                     background-color: white;
                     padding: 30px;
                     border-radius: 12px;
                     max-width: 600px;
                     box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+                    position: relative;
                 ">
+                    <button id="welcome-close-button" aria-label="Close" title="Close" style="
+                        position: absolute;
+                        top: 10px;
+                        right: 10px;
+                        background: transparent;
+                        border: none;
+                        font-size: 20px;
+                        cursor: pointer;
+                        line-height: 1;
+                    ">×</button>
                     <h2 style='margin: 0 0 20px 0; color: #0066cc; border-bottom: 3px solid #0066cc; padding-bottom: 10px;'>
                         🔍 Knowledge Graph Explorer
                     </h2>
@@ -184,32 +218,87 @@ class GraphVisualizer:
                         Start Exploring →
                     </button>
                 </div>
-                <script>
-                (function() {
-                    function attach() {
-                        var overlay = document.getElementById('welcome-overlay');
-                        if (!overlay) return;
-                        var btn = document.getElementById('welcome-start-button');
-                        if (!btn) return;
-                        btn.addEventListener('click', function() {
-                            try {
-                                overlay.style.display = 'none';
-                            } catch (e) {
-                                console && console.warn && console.warn('Failed to hide welcome overlay', e);
-                            }
-                        });
-                    }
-                    if (document.readyState === 'loading') {
-                        document.addEventListener('DOMContentLoaded', attach);
-                    } else {
-                        setTimeout(attach, 0);
-                    }
-                })();
-                </script>
             </div>
             """,
             width=0,
             height=0
+        )
+
+        # Wire up welcome overlay dismissal using Bokeh JS (works better under CSP than inline handlers).
+        plot.js_on_event(
+            DocumentReady,
+            CustomJS(
+                code="""
+                    (function () {
+                        // Guard: avoid double-binding if Bokeh triggers multiple DocumentReady runs.
+                        if (window.__kgWelcomeWired) return;
+                        window.__kgWelcomeWired = true;
+
+                        function getOverlay() {
+                            return document.getElementById('welcome-overlay');
+                        }
+                        function getPanel() {
+                            return document.getElementById('welcome-panel');
+                        }
+                        function hideOverlay() {
+                            const overlay = getOverlay();
+                            if (!overlay) return;
+                            overlay.style.display = 'none';
+                            overlay.style.pointerEvents = 'none';
+                        }
+
+                        // Use event delegation (capture phase) so it still works even if the overlay DOM is re-rendered.
+                        document.addEventListener('click', function (e) {
+                            const overlay = getOverlay();
+                            if (!overlay || overlay.style.display === 'none') return;
+
+                            let target = e && e.target ? e.target : null;
+                            if (!target) return;
+                            // If the click lands on a text node inside a button, promote to its parent element.
+                            if (target.nodeType === 3 && target.parentElement) {
+                                target = target.parentElement;
+                            }
+
+                            // Click on X or Start Exploring
+                            const onClose = target.closest && target.closest('#welcome-close-button');
+                            const onStart = target.closest && target.closest('#welcome-start-button');
+                            if (onClose || onStart) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                hideOverlay();
+                                return;
+                            }
+
+                            // Click outside the panel closes the overlay.
+                            const panel = getPanel();
+                            if (panel && !(panel.contains(target))) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                hideOverlay();
+                                return;
+                            }
+                        }, true);
+
+                        document.addEventListener('keydown', function (e) {
+                            if (e && (e.key === 'Escape' || e.key === 'Esc')) {
+                                hideOverlay();
+                            }
+                        }, true);
+
+                        // If Bokeh replaces the overlay node, ensure it still sits on top and is clickable.
+                        try {
+                            const obs = new MutationObserver(function () {
+                                const overlay = getOverlay();
+                                if (!overlay) return;
+                                overlay.style.zIndex = '9999';
+                            });
+                            obs.observe(document.documentElement || document.body, { childList: true, subtree: true });
+                        } catch (err) {
+                            // ignore
+                        }
+                    })();
+                """
+            )
         )
 
         # Build search experience (no intro tip)
@@ -338,11 +427,118 @@ class GraphVisualizer:
             width=350
         )
 
-        # Right panel: Search and Filters
+        # Documents dropdown (PDFs linked from connections + locally downloaded PDFs)
+        def _doc_label(doc_key: str) -> str:
+            try:
+                if doc_key.startswith('file:'):
+                    parsed = urlparse(doc_key)
+                    name = Path(parsed.path).name
+                    return name or doc_key
+                parsed = urlparse(doc_key)
+                name = Path(parsed.path).name
+                return name or doc_key
+            except Exception:
+                return doc_key
+
+        doc_option_pairs = sorted(
+            [(k, _doc_label(k)) for k in documents_index.keys()],
+            key=lambda pair: (pair[1].lower(), pair[0].lower())
+        )
+
+        documents_select = Select(
+            title="Documents",
+            value=doc_option_pairs[0][0] if doc_option_pairs else "",
+            options=doc_option_pairs,
+            width=350
+        )
+        documents_details = Div(
+            text=(
+                "<div style='padding: 12px; color: #555; font-size: 0.9em; background-color: #ffffff; border: 1px solid #dcdfe6; border-radius: 6px;'>"
+                "No documents detected yet. If PDFs were downloaded, re-run the scan/graph generation so they get indexed here."
+                "</div>"
+            ) if not doc_option_pairs else "",
+            width=350,
+            height=170,
+            sizing_mode="fixed"
+        )
+
+        doc_index_json = json.dumps(documents_index)
+        documents_select.js_on_change(
+            "value",
+            CustomJS(
+                args=dict(details_div=documents_details, doc_index_json=doc_index_json),
+                code="""
+                    const v = cb_obj.value;
+                    const index = JSON.parse(doc_index_json || '{}');
+                    const item = index[v];
+
+                    if (!v || !item) {
+                        details_div.text = "<div style='padding: 12px; color: #555; font-size: 0.9em; background-color: #ffffff; border: 1px solid #dcdfe6; border-radius: 6px;'>No document selected.</div>";
+                        return;
+                    }
+
+                    const connections = (item.connections || []).slice(0, 25);
+                    const nodes = (item.nodes || []).slice(0, 25);
+
+                    let html = "<div style='padding:12px; background-color:#ffffff; border:1px solid #dcdfe6; border-radius:6px; max-height:160px; overflow-y:auto;'>";
+                    html += `<div style='margin-bottom:8px;'><a href='${v}' target='_blank' style='color:#0066cc; text-decoration:none;'>📄 Open document</a></div>`;
+                    if (connections.length) {
+                        html += "<div style='font-size:0.9em; color:#12325b; margin-bottom:6px;'><strong>Linked connections</strong></div>";
+                        html += "<ul style='margin:0 0 10px 18px; padding:0; font-size:0.9em; color:#333;'>";
+                        for (const c of connections) {
+                            html += `<li>${c}</li>`;
+                        }
+                        html += "</ul>";
+                    }
+                    if (nodes.length) {
+                        html += "<div style='font-size:0.9em; color:#12325b; margin-bottom:6px;'><strong>Related nodes</strong></div>";
+                        html += "<ul style='margin:0 0 0 18px; padding:0; font-size:0.9em; color:#333;'>";
+                        for (const n of nodes) {
+                            html += `<li>${n}</li>`;
+                        }
+                        html += "</ul>";
+                    }
+                    html += "</div>";
+                    details_div.text = html;
+                """
+            )
+        )
+
+        # Initialize documents panel content for the first item.
+        if doc_option_pairs:
+            first = doc_option_pairs[0][0]
+            first_item = documents_index.get(first, {})
+            connections = (first_item.get('connections') or [])[:25]
+            nodes = (first_item.get('nodes') or [])[:25]
+            html = "<div style='padding:12px; background-color:#ffffff; border:1px solid #dcdfe6; border-radius:6px; max-height:160px; overflow-y:auto;'>"
+            html += f"<div style='margin-bottom:8px;'><a href='{first}' target='_blank' style='color:#0066cc; text-decoration:none;'>📄 Open document</a></div>"
+            if connections:
+                html += "<div style='font-size:0.9em; color:#12325b; margin-bottom:6px;'><strong>Linked connections</strong></div>"
+                html += "<ul style='margin:0 0 10px 18px; padding:0; font-size:0.9em; color:#333;'>" + "".join(f"<li>{c}</li>" for c in connections) + "</ul>"
+            if nodes:
+                html += "<div style='font-size:0.9em; color:#12325b; margin-bottom:6px;'><strong>Related nodes</strong></div>"
+                html += "<ul style='margin:0 0 0 18px; padding:0; font-size:0.9em; color:#333;'>" + "".join(f"<li>{n}</li>" for n in nodes) + "</ul>"
+            html += "</div>"
+            documents_details.text = html
+
+        documents_intro = Div(
+            text=(
+                "<div style='padding: 10px 12px; background-color: #e8f4f8; border-radius: 6px; border-left: 4px solid #0066cc; margin: 15px 0 10px 0;'>"
+                "<p style='margin: 0; font-size: 0.85em; color: #0c5460;'>"
+                "<strong>📄 Documents:</strong> PDFs linked as evidence for connections."
+                "</p></div>"
+            ),
+            width=350
+        )
+
+        # Right panel: Search, Documents, and Filters
         right_panel = column(
             search_input,
             clear_button,
             search_results,
+            documents_intro,
+            documents_select,
+            documents_details,
             filters_intro,
             entity_filter_label,
             entity_type_filter,
@@ -353,9 +549,19 @@ class GraphVisualizer:
             show_labels_checkbox,
             color_scheme_select,
             size_scheme_select,
-            sizing_mode="stretch_height",
-            width=370
+            sizing_mode="fixed",
+            width=370,
+            height=800
         )
+
+        # Make the right panel scrollable so the documents dropdown is always reachable.
+        try:
+            right_panel.styles = {
+                'overflow-y': 'auto',
+                'overflow-x': 'hidden'
+            }
+        except Exception:
+            pass
 
         # Left panel: Pinned connections only
         left_panel = column(
@@ -1183,6 +1389,19 @@ class GraphVisualizer:
         edge_reasons_compact = []  # For hover tooltips
         
         # Collect edge data and ensure no duplicate reasons
+        documents_index: Dict[str, Dict[str, List[str]]] = {}
+
+        def is_pdf_url(candidate: str) -> bool:
+            try:
+                parsed = urlparse(candidate)
+                suffix = Path((parsed.path or '').lower()).suffix
+                if suffix == '.pdf':
+                    return True
+                # Some PDFs are served via query parameters; be permissive.
+                q = (parsed.query or '').lower()
+                return 'pdf' in q and (candidate.startswith('http://') or candidate.startswith('https://'))
+            except Exception:
+                return False
         for u, v, data in graph.edges(data=True):
             edge_start.append(u)
             edge_end.append(v)
@@ -1320,6 +1539,52 @@ class GraphVisualizer:
                         reasons_html += f'<p style="margin: 5px 0 0 0; font-size: 0.8em; color: #999; font-style: italic;">⚠️ Source URL not available</p>'
 
                     reasons_html += '</div>'
+
+                # Collect document URLs for this connection and build a global index for the dropdown.
+                doc_urls: List[str] = []
+                # Prefer provenance URLs, then parsed URLs.
+                for p in data.get('provenance', []) or []:
+                    if isinstance(p, dict):
+                        su = str(p.get('source_url') or '')
+                        if su and is_pdf_url(su):
+                            doc_urls.append(su)
+                for r in unique_reasons:
+                    if isinstance(r, str) and '|||' in r:
+                        maybe_url = r.rsplit('|||', 1)[-1].strip()
+                        if maybe_url and is_pdf_url(maybe_url):
+                            doc_urls.append(maybe_url)
+
+                # De-dupe while preserving order
+                seen_doc = set()
+                doc_urls_unique: List[str] = []
+                for du in doc_urls:
+                    key = du.lower().rstrip('/')
+                    if key in seen_doc:
+                        continue
+                    seen_doc.add(key)
+                    doc_urls_unique.append(du)
+
+                if doc_urls_unique:
+                    # Inline dropdown in the pinned connection panel.
+                    reasons_html += '<details style="margin-top: 12px; padding: 10px; background-color: #ffffff; border: 1px solid #dcdfe6; border-radius: 6px;">'
+                    reasons_html += f'<summary style="cursor: pointer; color: #0066cc; font-weight: bold;">📄 Documents ({len(doc_urls_unique)})</summary>'
+                    reasons_html += '<ul style="margin: 10px 0 0 18px; padding: 0;">'
+                    for du in doc_urls_unique:
+                        reasons_html += f'<li style="margin: 6px 0;"><a href="{du}" target="_blank" style="color: #0066cc; text-decoration: none;">{du}</a></li>'
+                    reasons_html += '</ul>'
+                    reasons_html += '</details>'
+
+                    connection_label = f"{graph.nodes[u].get('display_name', u)} → {graph.nodes[v].get('display_name', v)}"
+                    for du in doc_urls_unique:
+                        entry = documents_index.get(du)
+                        if not entry:
+                            entry = {'connections': [], 'nodes': []}
+                            documents_index[du] = entry
+                        if connection_label not in entry['connections']:
+                            entry['connections'].append(connection_label)
+                        for node_name in (graph.nodes[u].get('display_name', u), graph.nodes[v].get('display_name', v)):
+                            if node_name not in entry['nodes']:
+                                entry['nodes'].append(str(node_name))
                 
                 reasons_html += '</div>'
                 
@@ -1442,19 +1707,46 @@ class GraphVisualizer:
                     const startDisplay = source.data['start_display'][idx] || start;
                     const endDisplay = source.data['end_display'][idx] || end;
                     const reasons = source.data['reasons'][idx];
+
+                // Create a stable key so repeated clicks don't create duplicates.
+                const rawKey = [String(start), String(end)].sort().join('||');
+                const edgeKey = rawKey.replace(/[^a-zA-Z0-9_\-]+/g, '_').slice(0, 120);
+                const connectionId = 'conn_' + edgeKey;
+
+                function syncModelFromDom(divElement) {
+                    try {
+                        div.text = divElement.innerHTML;
+                    } catch (e) {}
+                }
+
+                function ensurePinnedDelegation(divElement) {
+                    const pinnedItemsDiv = divElement.querySelector('#pinned-items');
+                    if (!pinnedItemsDiv) return;
+                    if (pinnedItemsDiv.__handlerAttached) return;
+                    pinnedItemsDiv.__handlerAttached = true;
+                    pinnedItemsDiv.addEventListener('click', function (e) {
+                        const t = e.target;
+                        if (!t) return;
+                        const btn = t.closest && t.closest('button[data-action="remove"]');
+                        if (!btn) return;
+                        const targetId = btn.getAttribute('data-target');
+                        if (!targetId) return;
+                        const el = divElement.querySelector('#' + CSS.escape(targetId));
+                        if (el) {
+                            el.remove();
+                            syncModelFromDom(divElement);
+                        }
+                    });
+                }
                 
-                // Create a unique ID for this connection
-                const timestamp = Date.now();
-                const connectionId = 'conn_' + timestamp;
-                
-                // Create new pinned item HTML with close button that uses proper event handling
+                // Create pinned item HTML (no inline onclick; CSP-safe). If it already exists, we will move it to top.
                 const newItemHTML = `
                     <div id="${connectionId}" style="margin-bottom: 15px; padding: 12px; background-color: white; border: 1px solid #0066cc; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
                         <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 10px;">
                             <h4 style="margin: 0; color: #0066cc; font-size: 1em; flex-grow: 1;">
                                 🔗 ${startDisplay} → ${endDisplay}
                             </h4>
-                            <button onclick="this.closest('div[id^=conn_]').remove();" 
+                            <button data-action="remove" data-target="${connectionId}" 
                                     style="background-color: #dc3545; color: white; border: none; border-radius: 3px; padding: 4px 8px; cursor: pointer; font-size: 0.85em; margin-left: 8px; flex-shrink: 0;">
                                 ✕
                             </button>
@@ -1471,10 +1763,21 @@ class GraphVisualizer:
                 if (divElement) {
                     const pinnedItemsDiv = divElement.querySelector('#pinned-items');
                     if (pinnedItemsDiv) {
-                        // Prepend the new item to the pinned-items div
-                        pinnedItemsDiv.insertAdjacentHTML('afterbegin', newItemHTML);
-                        // Update the Bokeh model to reflect the change
-                        div.text = divElement.innerHTML;
+                        ensurePinnedDelegation(divElement);
+
+                        const existing = divElement.querySelector('#' + CSS.escape(connectionId));
+                        if (existing) {
+                            // Update content and move to top.
+                            existing.querySelector('h4').innerHTML = `🔗 ${startDisplay} → ${endDisplay}`;
+                            const body = existing.querySelector('div[style*="font-size: 0.85em"]');
+                            if (body) body.innerHTML = reasons;
+                            pinnedItemsDiv.insertBefore(existing, pinnedItemsDiv.firstChild);
+                        } else {
+                            // Prepend the new item to the pinned-items div
+                            pinnedItemsDiv.insertAdjacentHTML('afterbegin', newItemHTML);
+                        }
+
+                        syncModelFromDom(divElement);
                     }
                 } else {
                     // Fallback to old method if we can't find the element
@@ -1495,7 +1798,7 @@ class GraphVisualizer:
         
         logger.info(f"Added interactive edges with hover tooltips and click-to-pin functionality")
         
-        return pinned_div
+        return pinned_div, documents_index
     
     def _add_edge_hover(self, plot, graph, graph_renderer):
         """

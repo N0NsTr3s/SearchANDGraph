@@ -17,7 +17,7 @@ class NLPConfig:
     enable_disambiguation: bool = True  # Disambiguate entities using context
     enable_query_expansion: bool = True  # Expand query with synonyms
     enable_confidence_scoring: bool = True  # Score relationship confidence
-    min_confidence: float = 0.3  # Minimum confidence threshold
+    min_confidence: float = 0.25  # Minimum confidence threshold
     enable_temporal_extraction: bool = True  # Extract temporal relationships
     
     # Advanced NLP features
@@ -26,7 +26,7 @@ class NLPConfig:
     enable_entity_linking: bool = True  # Link entities to Wikidata/DBpedia
     entity_linking_threshold: float = 0.85  # Minimum confidence for entity linking
     enable_relation_confidence: bool = True  # Compute confidence scores for each relation
-    min_relation_confidence: float = 0.4  # Filter relations below this confidence
+    min_relation_confidence: float = 0.25  # Filter relations below this confidence
 
 
 @dataclass
@@ -42,10 +42,10 @@ class CacheConfig:
 @dataclass
 class CrawlerConfig:
     """Configuration for the web crawler."""
-    query: str = "Nvidia"
+    query: str = "Lia Savonea"
     start_url: str = ""
     max_pages: int = 10
-    page_timeout: int = 20
+    page_timeout: int = 30
     browser_headless: bool = False
     use_bfs: bool = True  # Use BFS for crawling
     capture_all_links: bool = True  # Capture all links, including those related to discovered entities
@@ -56,17 +56,29 @@ class CrawlerConfig:
     multi_source_discovery: bool = True  # Use multiple sources beyond Wikipedia
     sources: list[str] = field(default_factory=lambda: ["wikipedia"])  # Note: "wikidata" provides no crawlable content (entity linker handles it via API), "dbpedia" has limited text (mostly RDF data), "web" is too noisy
     enable_enriched_discovery: bool = True  # Enable entity-based enriched discovery
-    enriched_discovery_max_entities: int = 3  # Max entities to discover (reduced from 15)
-    enriched_discovery_relevance_threshold: float = 0.25  # Min relevance score for entity discovery (25%)
-    enriched_discovery_max_pages: int = 5  # Max additional pages to crawl during enriched discovery
+    enriched_discovery_max_entities: int = 10  # Max entities to discover
+    enriched_discovery_relevance_threshold: float = 0.15  # Min relevance score for entity discovery
+    enriched_discovery_max_pages: int = 10  # Max additional pages to crawl during enriched discovery
     # Web search configuration
     enable_web_search: bool = True  # Use web search to discover URLs instead of just Wikipedia
-    web_search_max_results: int = 100  # Max search results to consider
-    web_search_min_relevance: float = 0.30  # Min relevance score for search results
+    web_search_max_results: int = 10  # Max search results to consider
+    web_search_min_relevance: float = 0.25  # Min relevance score for search results
     ignore_start_url: bool = False  # If True, completely ignore start_url and only use search results
+
+    # Web search downloads (persist PDFs to disk)
+    web_search_download_pdfs: bool = True  # Download PDFs from web search results
+    web_search_max_pdf_downloads: int = 20  # Upper bound per run
+    web_search_pdf_query_suffix: str = " filetype:pdf"  # Used to bias search toward PDF URLs
     # Phase-specific budgeting
-    phase2_max_pages: int = 1000  # Max pages allowed for Phase 2 deep dive (set high or 0 for unlimited)
+    phase2_max_pages: int = 10  # Max pages allowed for Phase 2 deep dive (set high or 0 for unlimited)
+    phase2_concurrent_tabs: Optional[int] = None  # Override tab count for Phase 2 (defaults to concurrent_tabs)
     enable_phase2: bool = True  # Enable Phase 2 deep-dive searches and crawling
+
+    # Document handling
+    document_min_relevance: float = 0.3  # Relevance threshold for keeping downloaded documents
+    downloads_prune_irrelevant: bool = True  # Move/delete irrelevant downloaded documents
+    downloads_prune_mode: str = "move"  # "move" or "delete"
+    downloads_irrelevant_dir: str = "_irrelevant"  # Folder under downloads/ for pruned docs
     
     
 

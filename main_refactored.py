@@ -209,9 +209,20 @@ def check_relevance_parallel(pages_data, nlp_processor, query, config):
     return relevant_pages, irrelevant_urls
 
 
-async def main():
-    """
-    Main function to run the focused crawler and knowledge graph builder.
+async def main(
+    query: str | None = None,
+    start_url: str | None = None,
+    max_pages: int | None = None,
+    add_timestamp: bool = False,
+    base_dir: str = "scans",
+):
+    """Run a full scan and build visualizations.
+
+    Args:
+        query: Search query string. If None, uses config default.
+        start_url: Optional seed URL. If None, uses config default.
+        max_pages: Optional crawl budget. If None, uses config default.
+        add_timestamp: If True, creates a unique scan directory per run.
     """
     loop = asyncio.get_running_loop()
     configure_asyncio_exception_handler(loop)
@@ -223,14 +234,17 @@ async def main():
     optimal_tabs = get_optimal_tab_count()
     config.crawler.concurrent_tabs = optimal_tabs
     
-    # You can customize the configuration here
-    config.crawler.query = "Nicusor Dan"
-    config.crawler.start_url = "https://ro.wikipedia.org/wiki/Nicu%C8%99or_Dan"
-    config.crawler.max_pages = 100
+    # Override config with provided parameters (API-friendly)
+    if query is not None:
+        config.crawler.query = query
+    if start_url is not None:
+        config.crawler.start_url = start_url
+    if max_pages is not None:
+        config.crawler.max_pages = max_pages
     
     # IMPORTANT: Get query-specific paths
     # This creates a separate folder for each query to avoid merging different scans
-    scan_paths = get_scan_paths(config.crawler.query, base_dir="scans", add_timestamp=False)
+    scan_paths = get_scan_paths(config.crawler.query, base_dir=base_dir, add_timestamp=add_timestamp)
     
     # Update configuration to use query-specific paths
     config.cache.cache_dir = str(scan_paths['cache_dir'])
@@ -318,7 +332,13 @@ async def main():
         logger.info("=" * 60)
         
         from web_search import WebSearcher
-        searcher = WebSearcher(max_results=config.crawler.web_search_max_results)
+        # Store all downloads under the scan's single downloads directory
+        search_download_dir = str(scan_paths['scan_dir'] / "downloads")
+        Path(search_download_dir).mkdir(parents=True, exist_ok=True)
+        searcher = WebSearcher(
+            max_results=config.crawler.web_search_max_results,
+            download_dir=search_download_dir
+        )
         crawler.set_web_searcher(searcher)
 
         # Run parallel searches for expanded query set (always includes base query)
@@ -353,6 +373,68 @@ async def main():
             config.crawler.query,
             min_score=config.crawler.web_search_min_relevance
         )
+
+        # Optionally persist PDFs to disk from web search results.
+        # This complements crawler document handling (which downloads PDFs it actually visits).
+        if getattr(config.crawler, 'web_search_download_pdfs', False):
+            max_pdf_downloads = int(getattr(config.crawler, 'web_search_max_pdf_downloads', 0) or 0)
+            if max_pdf_downloads > 0:
+                try:
+                    from urllib.parse import urlparse
+
+                    def is_pdf_url(candidate_url: str) -> bool:
+                        try:
+                            parsed = urlparse(candidate_url)
+                            return Path((parsed.path or '').lower()).suffix == '.pdf'
+                        except Exception:
+                            return False
+
+                    pdf_urls: list[str] = []
+                    if scored_results:
+                        for url, _title, _source, _score in scored_results:
+                            if is_pdf_url(url):
+                                pdf_urls.append(url)
+
+                    # If we didn't get enough direct PDF URLs, run a PDF-biased query.
+                    if len(pdf_urls) < max_pdf_downloads:
+                        suffix = str(getattr(config.crawler, 'web_search_pdf_query_suffix', ''))
+                        pdf_query = f"{config.crawler.query}{suffix}" if suffix else config.crawler.query
+                        pdf_results = searcher.search_multi(pdf_query, max_results=min(config.crawler.web_search_max_results, 50))
+                        # Filter the PDF-biased results by relevance too.
+                        try:
+                            pdf_scored = searcher.filter_urls_by_relevance(
+                                pdf_results,
+                                config.crawler.query,
+                                min_score=config.crawler.web_search_min_relevance
+                            )
+                            for url, _title, _source, _score in pdf_scored:
+                                if is_pdf_url(url):
+                                    pdf_urls.append(url)
+                        except Exception:
+                            for url, _title, _source in pdf_results:
+                                if is_pdf_url(url):
+                                    pdf_urls.append(url)
+
+                    # De-dupe while preserving order
+                    seen_pdf = set()
+                    unique_pdf_urls: list[str] = []
+                    for url in pdf_urls:
+                        key = url.lower().rstrip('/')
+                        if key in seen_pdf:
+                            continue
+                        seen_pdf.add(key)
+                        unique_pdf_urls.append(url)
+
+                    to_download = unique_pdf_urls[:max_pdf_downloads]
+                    if to_download:
+                        logger.info(f"Downloading up to {len(to_download)} PDF(s) from web search into: {search_download_dir}")
+                        download_results = searcher.download_files_parallel(to_download, max_workers=5)
+                        downloaded_ok = sum(1 for v in download_results.values() if v is not None)
+                        logger.info(f"Web-search PDF download complete: {downloaded_ok}/{len(to_download)} successful")
+                    else:
+                        logger.info("No PDF URLs found in web search results to download")
+                except Exception as e:
+                    logger.warning(f"Web-search PDF download step failed (continuing without PDFs): {e}")
         
         if scored_results:
             logger.info(f"Filtered to {len(scored_results)} relevant URLs (score >= {config.crawler.web_search_min_relevance})")
@@ -380,6 +462,8 @@ async def main():
     
     logger.info(f"Starting crawl with {len(starting_urls)} seed URLs")
     
+    pipeline = None
+
     try:
         # Start the browser once for the entire crawling session
         await crawler.start()
@@ -448,9 +532,6 @@ async def main():
             
             # Run full pipeline: Translate -> Process -> Aggregate
             await pipeline.run_full_pipeline()
-            
-            # Shutdown the pipeline's thread pool executor
-            pipeline.shutdown()
             
             # Get pipeline statistics
             pipeline_stats = pipeline.get_statistics()
@@ -529,6 +610,9 @@ async def main():
             # Track Phase 2 budget separately
             phase2_pages_crawled = 0
             phase2_max = config.crawler.phase2_max_pages
+
+            # Normalize visited set for reliable de-dupe across Phase 1/2.
+            visited_urls_normalized = {crawler._normalize_url(u) for u in visited_urls}
             
             logger.info(f"Phase 2 Budget:")
             logger.info(f"  Phase 1 pages crawled: {len(visited_urls)}")
@@ -607,7 +691,7 @@ async def main():
                             crawler=crawler,
                             max_iterations=2,
                             max_results_per_query=5,
-                            min_relevance_score=0.4
+                            min_relevance_score=float(getattr(config.crawler, 'web_search_min_relevance', 0.15) or 0.15)
                         )
 
                         # Run autonomous iterative search
@@ -634,61 +718,70 @@ async def main():
                             urls_to_crawl = len(deep_dive_urls)
                         
                         logger.info(f"Crawling top {urls_to_crawl} URLs for '{entity_name}'...")
-                        
-                        # Crawl discovered URLs
+
+                        # Crawl discovered URLs (concurrently, multi-tab)
                         entity_crawl_count = 0
-                        for idx, (url, title, source, score) in enumerate(deep_dive_urls[:urls_to_crawl], 1):
-                            if url in visited_urls:
-                                logger.debug(f"  [{idx}/{urls_to_crawl}] Already visited: {url}")
+                        candidates: list[str] = []
+                        meta: dict[str, tuple[str, float]] = {}
+
+                        for url, title, _source, score in deep_dive_urls[:urls_to_crawl]:
+                            normalized = crawler._normalize_url(url)
+                            if normalized in visited_urls_normalized:
                                 continue
-                            
-                            logger.info(f"  [{idx}/{urls_to_crawl}] Crawling: {title[:60]}...")
+                            candidates.append(url)
+                            meta[url] = (title, float(score))
+
+                        if not candidates:
+                            logger.info("No new URLs to crawl for this entity (all already visited)")
+                            continue
+
+                        phase2_tabs = getattr(config.crawler, 'phase2_concurrent_tabs', None)
+                        results = await crawler.fetch_urls_parallel(
+                            candidates,
+                            query=config.crawler.query,
+                            concurrent_tabs=phase2_tabs
+                        )
+
+                        for idx, (url, result) in enumerate(zip(candidates, results), 1):
+                            title, score = meta.get(url, (url, 0.0))
+                            logger.info(f"  [{idx}/{len(candidates)}] Crawling: {str(title)[:60]}...")
                             logger.info(f"    URL: {url}")
                             logger.info(f"    Relevance: {score:.2f}")
-                            
+
+                            normalized = crawler._normalize_url(url)
+                            visited_urls.add(url)
+                            visited_urls_normalized.add(normalized)
+
                             try:
-                                # === FIX 2: ADD DOCUMENT HANDLING LOGIC ===
-                                if crawler._is_document_url(url):
-                                    logger.info(f"  Processing document: {url}")
-                                    # Use the crawler's DocumentExtractor when available
-                                    try:
-                                        text_content, _ = await crawler.document_extractor.process_document_url(url, query_name=config.crawler.query)
-                                    except Exception:
-                                        # Fallback to internal helper if document_extractor isn't present
-                                        result = await crawler._process_document_url(
-                                            url,
-                                            depth=2,
-                                            query=config.crawler.query,
-                                            normalized_url=crawler._normalize_url(url)
-                                        )
-                                        text_content = result.get('content') if isinstance(result, dict) else None
-                                else:
-                                    # It's a regular web page
-                                    _, text_content = await crawler.fetch_page_content(url)
-                                # ============================================
-
-                                if text_content and len(text_content.strip()) >= 100:
-                                    # Enqueue and process the content
-                                    content_type = "document" if crawler._is_document_url(url) else "web_page"
-                                    await pipeline.enqueue_content(text_content, url, content_type=content_type)
+                                text_content = (result or {}).get('content') if isinstance(result, dict) else None
+                                if text_content and len(str(text_content).strip()) >= 100:
+                                    content_type = 'pdf' if crawler._is_document_url(url) else 'webpage'
+                                    before = pipeline.get_statistics().get('total_added_to_graph', 0)
+                                    await pipeline.enqueue_content(
+                                        url=url,
+                                        raw_content=text_content,
+                                        content_type=content_type,
+                                        source_url=url
+                                    )
                                     await pipeline.run_full_pipeline()
+                                    after = pipeline.get_statistics().get('total_added_to_graph', 0)
+                                    added = max(0, int(after) - int(before))
 
-                                    phase2_stats = pipeline.get_statistics()
-                                    if phase2_stats['total_added_to_graph'] > 0:
-                                        logger.info(f"    ✓ Processed {'document' if content_type=='document' else 'page'}")
-                                        entity_crawl_count += 1
-                                        phase2_pages_crawled += 1
-
-                                visited_urls.add(url)
-                                
-                                # Check if we've hit the Phase 2 budget limit
-                                if phase2_max > 0 and phase2_pages_crawled >= phase2_max:
-                                    logger.info(f"    Phase 2 budget limit reached ({phase2_pages_crawled}/{phase2_max})")
-                                    break
-                                
+                                    entity_crawl_count += 1
+                                    phase2_pages_crawled += 1
+                                    if added > 0:
+                                        logger.info(f"    ✓ Added to graph (+{added})")
+                                    else:
+                                        logger.info("    ✓ Processed (no new graph additions)")
+                                else:
+                                    logger.info("    ✗ Skipped (no usable content)")
                             except Exception as e:
                                 logger.warning(f"    ✗ Failed to process: {e}")
-                                continue
+
+                            # Check if we've hit the Phase 2 budget limit
+                            if phase2_max > 0 and phase2_pages_crawled >= phase2_max:
+                                logger.info(f"    Phase 2 budget limit reached ({phase2_pages_crawled}/{phase2_max})")
+                                break
                         
                         logger.info(f"Entity '{entity_name}' deep dive complete: {entity_crawl_count} pages added to graph")
                         
@@ -884,6 +977,13 @@ async def main():
            
         
         finally:
+            # Always shutdown the pipeline executor (if created)
+            try:
+                if pipeline is not None:
+                    pipeline.shutdown()
+            except Exception:
+                pass
+
             # Always close the browser
             await crawler.close()
         

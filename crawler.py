@@ -156,91 +156,124 @@ class WebCrawler:
         from urllib.parse import quote_plus
         
         logger.info(f"Performing Google search in browser: '{query}'")
-        search_url="https://www.google.com/"
-        await asyncio.sleep(1)
+        # Note: Google is sometimes slow/heavy and 'load' may never fire within a tight timeout.
+        # Prefer waiting for the results container and scraping via JS evaluation.
         search_url = f"https://www.google.com/search?q={quote_plus(query)}"
         
         results = []
         tab = None
         try:
             tab = await self.browser.get(search_url, new_tab=True)
-            await tab.wait_for('load', timeout=15)
-            
-            # Wait for the main search results container to appear
-            await tab.wait_for_selector('#search', timeout=10)
+
+            # Use a more forgiving wait strategy than full 'load'.
+            page_timeout = int(getattr(self.config, 'page_timeout', 30) or 30)
+            try:
+                await tab.wait_for_selector('body', timeout=min(page_timeout, 15))
+            except Exception:
+                pass
+
+            # Wait for the main search results container if available.
+            try:
+                await tab.wait_for_selector('#search', timeout=page_timeout)
+            except Exception:
+                # Sometimes Google shows alternative layouts or blocks; continue and attempt scraping anyway.
+                logger.debug("Google results container '#search' not detected within timeout; proceeding to scrape")
 
             # Try to dismiss common consent dialogs (Google cookie banners) if present
             try:
-                # Common id used by Google for consent dialog
-                consent_btn = await tab.select_one('#L2AGLb')
-                if consent_btn:
-                    try:
-                        await consent_btn.click()
-                        await tab.wait_for('load', timeout=3)
-                    except Exception:
-                        # ignore click failures and continue
-                        pass
+                # Common ids / selectors used by Google consent dialogs
+                for selector in ('#L2AGLb', 'button#L2AGLb', 'button[aria-label="Accept all"]', 'button[aria-label="I agree"]'):
+                    consent_btn = await tab.select_one(selector)
+                    if consent_btn:
+                        try:
+                            await consent_btn.click()
+                            # Give the DOM a moment to update
+                            await asyncio.sleep(1)
+                        except Exception:
+                            pass
+                        break
             except Exception:
                 pass
 
             # Use a single-page JS evaluation to extract result links/titles to avoid
             # working with potentially stale element handles (which can cause
             # "Could not find node with given id" CDP errors when the DOM mutates).
-            try:
-                script = '''() => {
-                    const out = [];
-                    // Search result containers can be found under #search; use common result wrapper classes
-                    const nodes = document.querySelectorAll('#search .g');
-                    for (const node of nodes) {
-                        const a = node.querySelector('a');
-                        const h3 = node.querySelector('h3');
-                        if (a && h3 && a.href && a.href.startsWith('http')) {
-                            out.push({href: a.href, title: h3.innerText});
-                        }
-                    }
-                    // As a fallback, also try any link with an h3 inside
-                    if (out.length === 0) {
-                        const anchors = document.querySelectorAll('#search a');
-                        for (const a of anchors) {
-                            const h3 = a.querySelector('h3');
-                            if (a.href && h3 && a.href.startsWith('http')) {
-                                out.push({href: a.href, title: h3.innerText});
-                            }
-                        }
-                    }
-                    return out;
-                }'''
+            script = '''() => {
+                const out = [];
+                const seen = new Set();
 
-                scraped = await tab.evaluate(script)
-                if isinstance(scraped, list):
-                    for item in scraped:
+                function add(href, title) {
+                    if (!href || !title) return;
+                    if (!href.startsWith('http')) return;
+                    if (href.includes('google.com/search') || href.includes('accounts.google.com')) return;
+                    const key = href.toLowerCase().replace(/\/$/, '');
+                    if (seen.has(key)) return;
+                    seen.add(key);
+                    out.push({href, title});
+                }
+
+                // Primary: standard results
+                const nodes = document.querySelectorAll('#search .g');
+                for (const node of nodes) {
+                    const a = node.querySelector('a');
+                    const h3 = node.querySelector('h3');
+                    if (a && h3) add(a.href, h3.innerText);
+                }
+
+                // Fallback: any h3 inside search anchors
+                if (out.length === 0) {
+                    const anchors = document.querySelectorAll('#search a');
+                    for (const a of anchors) {
+                        const h3 = a.querySelector('h3');
+                        if (h3) add(a.href, h3.innerText);
+                    }
+                }
+
+                // Last fallback: global h3 links
+                if (out.length === 0) {
+                    const anchors = document.querySelectorAll('a');
+                    for (const a of anchors) {
+                        const h3 = a.querySelector('h3');
+                        if (h3) add(a.href, h3.innerText);
+                    }
+                }
+
+                return out;
+            }'''
+
+            # Retry scraping a few times in case the DOM populates late.
+            last_eval_error = None
+            scraped = None
+            for attempt in range(3):
+                try:
+                    if attempt > 0:
+                        # Scroll a bit to trigger lazy-loading and give scripts time.
                         try:
-                            href = item.get('href')
-                            title = item.get('title')
-                            if href and title and not any(junk in href for junk in ['google.com/search', 'accounts.google.com']):
-                                results.append((href, title, 'google'))
-                                if len(results) >= max_results:
-                                    break
+                            await tab.evaluate('() => window.scrollTo(0, Math.max(200, document.body.scrollHeight * 0.25))')
                         except Exception:
-                            continue
-            except Exception as e:
-                # Last-resort: fall back to element handles (less robust)
-                logger.debug(f"JS evaluation of search results failed, falling back to element handles: {e}")
-                links = await tab.select_all('#search a')
-                for link in links[:max_results*2]:  # Get more links to filter down
+                            pass
+                        await asyncio.sleep(1.5 * attempt)
+                    scraped = await tab.evaluate(script)
+                    if isinstance(scraped, list) and len(scraped) > 0:
+                        break
+                except Exception as e:
+                    last_eval_error = e
+                    await asyncio.sleep(1)
+
+            if isinstance(scraped, list):
+                for item in scraped:
                     try:
-                        href = await link.get_attribute('href')
-                        h3 = await link.select('h3')
-                        
-                        if href and h3 and href.startswith('http'):
-                            title = await h3.get_text()
-                            # Basic validation to filter out non-result links
-                            if title and not any(junk in href for junk in ['google.com/search', 'accounts.google.com']):
-                                results.append((href, title, 'google'))
-                                if len(results) >= max_results:
-                                    break
+                        href = item.get('href')
+                        title = item.get('title')
+                        if href and title:
+                            results.append((href, title, 'google'))
+                            if len(results) >= max_results:
+                                break
                     except Exception:
-                        continue  # Ignore links that can't be parsed
+                        continue
+
+            if not results and last_eval_error is not None:
+                logger.debug(f"Google scrape JS evaluation error: {last_eval_error}")
                         
         except Exception as e:
             logger.error(f"Browser-based Google search for '{query}' failed: {e}")
@@ -251,6 +284,19 @@ class WebCrawler:
                 except Exception:
                     pass  # Ignore errors on tab close
         
+        # If Google failed or yielded no results, fall back to the non-browser WebSearcher (DDG/Bing).
+        if not results and self.web_searcher is not None:
+            logger.info("Google yielded no results; falling back to WebSearcher.search_multi()")
+            try:
+                # WebSearcher is synchronous (requests); run it off the event loop.
+                fallback = await asyncio.to_thread(self.web_searcher.search_multi, query, max_results)
+                if isinstance(fallback, list):
+                    for url, title, source in fallback[:max_results]:
+                        if url and title:
+                            results.append((url, title, source))
+            except Exception as e:
+                logger.warning(f"WebSearcher fallback failed: {e}")
+
         logger.info(f"Browser-based search found {len(results)} results.")
         return results
 
@@ -816,10 +862,11 @@ class WebCrawler:
         try:
             parsed = urlparse(url)
             url_lower = url.lower()
+            path_lower = (parsed.path or "").lower()
+            path_suffix = Path(path_lower).suffix
             
-            # SECURITY: Only allow HTTPS URLs (exclude HTTP)
-            if parsed.scheme != 'https':
-                logger.debug(f"Filtering non-HTTPS URL: {url}")
+            # Allow normal web schemes
+            if parsed.scheme not in {'http', 'https'}:
                 return False
             
             # Check for action protocols that should be excluded
@@ -829,24 +876,23 @@ class WebCrawler:
                 if url_lower.startswith(protocol):
                     return False
             
-            # NEW: Allow document extensions for document extraction
-            document_extensions = ['.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx']
-            is_document = any(url_lower.endswith(ext) for ext in document_extensions)
-            
-            # NEW: Allow certain image extensions for OCR
-            ocr_image_extensions = ['.png', '.jpg', '.jpeg']
-            is_ocr_image = any(url_lower.endswith(ext) for ext in ocr_image_extensions)
+            # Allow document extensions for document extraction (use path suffix so query strings don't break detection)
+            document_extensions = {'.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx'}
+            is_document = path_suffix in document_extensions
+
+            # Allow certain image extensions for OCR (plus common raster formats supported by DocumentExtractor)
+            ocr_image_extensions = {'.png', '.jpg', '.jpeg', '.gif', '.bmp'}
+            is_ocr_image = path_suffix in ocr_image_extensions
             
             # If it's a document or OCR-capable image, allow it
             if is_document or is_ocr_image:
                 logger.debug(f"Allowing document/image URL: {url}")
                 return True
             
-            # Check for other image file extensions (still exclude these)
-            other_image_extensions = ['.gif', '.bmp', '.svg', '.webp', '.ico', '.tiff']
-            for ext in other_image_extensions:
-                if url_lower.endswith(ext):
-                    return False
+            # Check for other image file extensions (exclude vector/icons by default)
+            other_image_extensions = {'.svg', '.webp', '.ico', '.tiff', '.tif'}
+            if path_suffix in other_image_extensions:
+                return False
             
             # Check if URL contains image-related paths
             image_patterns = ['/file:', '/image:', '/special:filepath', '/special:upload']
@@ -882,7 +928,7 @@ class WebCrawler:
                 
                 # CRUD operations
                 'add', 'create', 'delete', 'remove', 'update', 'modify',
-                'submit', 'post', 'upload', 'download', 'adauga', 'adaugă',
+                'submit', 'post', 'upload', 'adauga', 'adaugă',
                 'sterge', 'șterge', 'actualizeaza', 'actualizează',
                 
                 # Social/Interactive actions
@@ -913,8 +959,8 @@ class WebCrawler:
                     logger.debug(f"Filtering year page: {url}")
                     return False
             
-            # Validate HTTPS scheme and has domain
-            return parsed.scheme == 'https' and bool(parsed.netloc)
+            # Validate scheme and has domain
+            return parsed.scheme in {'http', 'https'} and bool(parsed.netloc)
             
         except Exception:
             return False
@@ -930,10 +976,17 @@ class WebCrawler:
         Returns:
             True if URL is a document/image that needs special processing
         """
-        url_lower = url.lower()
-        document_extensions = ['.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx',
-                              '.png', '.jpg', '.jpeg']
-        return any(url_lower.endswith(ext) for ext in document_extensions)
+        try:
+            parsed = urlparse(url)
+            suffix = Path((parsed.path or "").lower()).suffix
+        except Exception:
+            suffix = ""
+
+        document_extensions = {
+            '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx',
+            '.png', '.jpg', '.jpeg', '.gif', '.bmp'
+        }
+        return suffix in document_extensions
     
     async def _check_for_error_page(self, page: uc.Tab) -> bool:
         """
@@ -2040,43 +2093,39 @@ class WebCrawler:
         
         try:
             logger.info(f"Processing document: {url}")
-            
-            # Extract query name for folder organization
-            query_slug = re.sub(r'[^\w\s-]', '_', query)[:50]
-            
-            # Download and extract content
-            text, tables = await self.document_extractor.process_document_url(
+
+            text, tables, filepath = await self.document_extractor.process_document_url_with_path(
                 url,
-                query_name=query_slug
+                query_name=None,
             )
-            
+
+            if filepath:
+                result['downloaded_path'] = str(filepath)
+
             if not text or len(text) < 100:
                 logger.warning(f"  Document extraction failed or insufficient content: {url}")
                 return result
-            
+
             logger.info(f"  Extracted {len(text)} characters from document")
             if tables:
                 logger.info(f"  Extracted {len(tables)} table(s) from document")
-            
-            # Check relevance of extracted text
+
             # Simple keyword-based relevance check
             query_lower = query.lower()
             text_lower = text.lower()
-            
+
             relevance_score = 0.0
             if query_lower in text_lower:
                 relevance_score += 0.5
-            
-            # Check for query words
-            query_words = set(query_lower.split())
-            query_words = {w for w in query_words if len(w) > 2}
-            
+
+            query_words = {w for w in set(query_lower.split()) if len(w) > 2}
             for word in query_words:
                 if word in text_lower:
                     relevance_score += 0.1
-            
-            is_relevant = relevance_score >= 0.3  # 30% threshold
-            
+
+            threshold = float(getattr(self.config, 'document_min_relevance', 0.3) or 0.3)
+            is_relevant = relevance_score >= threshold
+
             if is_relevant:
                 logger.info(f"  Document is relevant (score: {relevance_score:.2f})")
                 result['success'] = True
@@ -2085,13 +2134,128 @@ class WebCrawler:
                 result['relevance_score'] = relevance_score
             else:
                 logger.info(f"  Document not relevant (score: {relevance_score:.2f})")
-            
+                # Optionally prune irrelevant documents (move/delete).
+                try:
+                    if filepath and getattr(self.config, 'downloads_prune_irrelevant', False):
+                        mode = str(getattr(self.config, 'downloads_prune_mode', 'move') or 'move').lower()
+                        irrelevant_dirname = str(getattr(self.config, 'downloads_irrelevant_dir', '_irrelevant') or '_irrelevant')
+                        target_dir = Path(filepath).parent / irrelevant_dirname
+                        target_dir.mkdir(parents=True, exist_ok=True)
+                        if mode == 'delete':
+                            Path(filepath).unlink(missing_ok=True)
+                        else:
+                            target_path = target_dir / Path(filepath).name
+                            if not target_path.exists():
+                                Path(filepath).replace(target_path)
+                except Exception:
+                    pass
+
             return result
-            
+
         except Exception as e:
             logger.error(f"Error processing document {url}: {e}")
             result['error'] = str(e)
             return result
+
+    async def fetch_urls_parallel(self, urls: list[str], query: str, concurrent_tabs: int | None = None) -> list[dict]:
+        """Fetch a list of URLs using multiple browser tabs concurrently.
+
+        This is used by Phase 2 deep-dive so it doesn't crawl one page at a time.
+        The returned list preserves input order.
+        """
+        if not urls:
+            return []
+
+        if not self.browser:
+            await self.start()
+
+        from urllib.parse import urlparse
+
+        max_tabs = int(concurrent_tabs or getattr(self.config, 'concurrent_tabs', 5) or 5)
+        out: list[dict] = []
+
+        for start in range(0, len(urls), max_tabs):
+            batch = urls[start:start + max_tabs]
+            tabs: list[tuple[str, uc.Tab | None]] = []
+
+            for url in batch:
+                if self._is_document_url(url):
+                    tabs.append((url, None))
+                    continue
+
+                try:
+                    tab = await self.browser.get(url, new_tab=True)  # type: ignore
+                    await asyncio.sleep(0.5)
+                    tabs.append((url, tab))
+                except Exception:
+                    tabs.append((url, None))
+
+            tasks = []
+            for url, tab in tabs:
+                if tab is None:
+                    if self._is_document_url(url):
+                        tasks.append(self._process_document_url(url, 0, query, self._normalize_url(url)))
+                    else:
+                        async def failed(failed_url: str) -> dict:
+                            return {
+                                'success': False,
+                                'url': failed_url,
+                                'normalized_url': self._normalize_url(failed_url),
+                                'content': None,
+                                'is_relevant': False,
+                                'relevance_score': 0.0,
+                                'all_links': [],
+                                'related_links': [],
+                                'is_error_page': False,
+                                'error': 'Failed to open tab',
+                            }
+                        tasks.append(failed(url))
+                else:
+                    domain = urlparse(url).netloc
+                    tasks.append(self._process_opened_tab(tab, url, 0, query, domain, None))
+
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for url, result in zip(batch, results):
+                if isinstance(result, Exception):
+                    out.append({
+                        'success': False,
+                        'url': url,
+                        'normalized_url': self._normalize_url(url),
+                        'content': None,
+                        'is_relevant': False,
+                        'relevance_score': 0.0,
+                        'all_links': [],
+                        'related_links': [],
+                        'is_error_page': False,
+                        'error': str(result),
+                    })
+                else:
+                    out.append(result if isinstance(result, dict) else {
+                        'success': False,
+                        'url': url,
+                        'normalized_url': self._normalize_url(url),
+                        'content': None,
+                        'is_relevant': False,
+                        'relevance_score': 0.0,
+                        'all_links': [],
+                        'related_links': [],
+                        'is_error_page': False,
+                        'error': 'Unexpected result type',
+                    })
+
+            # Best-effort close tabs
+            for _url, tab in tabs:
+                try:
+                    if tab is not None:
+                        maybe_close = getattr(tab, 'close', None)
+                        if callable(maybe_close):
+                            r = maybe_close()
+                            if inspect.isawaitable(r):
+                                await r
+                except Exception:
+                    pass
+
+        return out
 
     async def _process_opened_tab(
         self,

@@ -68,6 +68,14 @@ class DocumentExtractor:
         self.download_dir = Path(download_dir)
         self.download_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Document downloads will be saved to: {self.download_dir}")
+
+        # Manifest for dedupe across crawler + web search downloads.
+        try:
+            from download_manifest import DownloadManifest
+
+            self._manifest = DownloadManifest(self.download_dir / "manifest.json")
+        except Exception:
+            self._manifest = None
     
     def _sanitize_filename(self, url: str, prefix: str = "") -> str:
         """
@@ -132,14 +140,15 @@ class DocumentExtractor:
             Path to downloaded file or None if failed
         """
         try:
-            # Create query-specific subdirectory
-            if query_name:
-                safe_query = re.sub(r'[^\w\s-]', '_', query_name)[:50]
-                download_path = self.download_dir / safe_query
-            else:
-                download_path = self.download_dir / "general"
-            
+            # Always use a single flat download folder (no per-query subfolders).
+            download_path = self.download_dir
             download_path.mkdir(parents=True, exist_ok=True)
+
+            # Dedupe by URL via manifest.
+            if self._manifest is not None and not force:
+                existing = self._manifest.get_by_url(url)
+                if existing and existing.path and Path(existing.path).exists():
+                    return Path(existing.path)
             
             # Generate filename
             filename = self._sanitize_filename(url)
@@ -148,6 +157,13 @@ class DocumentExtractor:
             # Skip if already downloaded
             if filepath.exists() and not force:
                 logger.debug(f"Document already downloaded: {filepath}")
+                if self._manifest is not None:
+                    try:
+                        from download_manifest import sha256_file
+
+                        self._manifest.upsert(url=url, content_hash=sha256_file(filepath), path=filepath)
+                    except Exception:
+                        pass
                 return filepath
             
             # Download file
@@ -157,6 +173,35 @@ class DocumentExtractor:
                     if response.status == 200:
                         content = await response.read()
                         filepath.write_bytes(content)
+
+                        # Dedupe by content hash
+                        if self._manifest is not None:
+                            try:
+                                from download_manifest import sha256_bytes
+
+                                digest = sha256_bytes(content)
+                                existing_by_hash = self._manifest.get_by_hash(digest)
+                                if existing_by_hash and existing_by_hash.path and Path(existing_by_hash.path).exists():
+                                    try:
+                                        filepath.unlink(missing_ok=True)
+                                    except Exception:
+                                        pass
+                                    self._manifest.upsert(url=url, content_hash=digest, path=Path(existing_by_hash.path))
+                                    return Path(existing_by_hash.path)
+
+                                stable_name = f"{digest[:10]}_{filepath.name}"
+                                stable_path = download_path / stable_name
+                                if stable_path != filepath and not stable_path.exists():
+                                    try:
+                                        filepath.replace(stable_path)
+                                        filepath = stable_path
+                                    except Exception:
+                                        pass
+
+                                self._manifest.upsert(url=url, content_hash=digest, path=filepath)
+                            except Exception:
+                                pass
+
                         logger.info(f"Downloaded: {filepath} ({len(content)} bytes)")
                         return filepath
                     else:
@@ -463,10 +508,18 @@ class DocumentExtractor:
         Returns:
             Tuple of (extracted_text, extracted_tables)
         """
-        # Download document
+        text, tables, _path = await self.process_document_url_with_path(url, query_name=query_name)
+        return text, tables
+
+    async def process_document_url_with_path(
+        self,
+        url: str,
+        query_name: Optional[str] = None
+    ) -> Tuple[Optional[str], Optional[List[List[List[str]]]], Optional[Path]]:
+        """Like process_document_url, but also returns the downloaded filepath."""
         filepath = await self.download_document(url, query_name)
         if not filepath:
-            return None, None
+            return None, None, None
         
         # Determine file type and extract accordingly
         ext = filepath.suffix.lower()
@@ -483,15 +536,15 @@ class DocumentExtractor:
                 else:
                     text = table_text
             
-            return text, tables
+            return text, tables, filepath
         
         elif ext in ['.png', '.jpg', '.jpeg', '.gif', '.bmp']:
             text = self.extract_text_from_image(filepath)
-            return text, None
+            return text, None, filepath
         
         else:
             logger.warning(f"Unsupported file type: {ext}")
-            return None, None
+            return None, None, filepath
     
     def cleanup_old_downloads(self, days_old: int = 7):
         """
