@@ -1,0 +1,38 @@
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# In-repo venv layout (this workspace has these at repo root)
+Scripts/
+Lib/
+Include/
+share/
+pyvenv.cfg
+
+# Logs / runtime artifacts
+logs/
+*.log
+
+# App-generated data/output
+cache/
+scans/
+
+# Local editor / OS
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Type checker / test caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
