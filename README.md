@@ -1,316 +1,99 @@
-# Knowledge Graph Extractor
+# SearchANDGraph
 
-A Python application that crawls web pages, extracts named entities and their relationships, and visualizes them as an interactive knowledge graph.
+SearchANDGraph is a Python application that discovers web sources for a query, crawls pages (and optionally documents), extracts entities/relations, and produces a knowledge graph with HTML visualizations.
 
-## Features
+It can be run as a script (writes artifacts under `scans/`) or as a small FastAPI server that lets you type a query in a browser and view the generated graph.
 
-- **BFS Web Crawling**: Systematic breadth-first search crawling with comprehensive link capture
-- **Web Crawling**: Automated web crawling using nodriver (undetected Chrome)
-- **NLP Processing**: Entity and relation extraction using spaCy
-- **Translation Support**: Automatic translation for multilingual content
-- **Entity Deduplication**: Smart consolidation of partial names into full names
-- **Graph Filtering**: Remove isolated nodes and irrelevant entities
-- **Temporal Analysis**: Extract and track dates/timelines associated with relationships
-- **Knowledge Graph**: Build relationships between entities
-- **Interactive Visualization**: Bokeh-based interactive graph visualization with temporal information
-- **Modular Design**: Clean, maintainable code structure
-- **Comprehensive Logging**: Detailed logging for debugging and monitoring
+## Key Features
 
-## Security Scanning (CI)
+- **Crawl + extract**: Uses `nodriver` (Chrome automation) + `trafilatura` for webpage text extraction.
+- **Web search seeding**: Discovers candidate URLs via `web_search.py` (DuckDuckGo/Bing scraping).
+- **Documents**: Downloads PDFs/images and extracts text/tables where possible.
+- **NLP pipeline**: Relevance scoring, entity extraction, relation extraction; optional translation to English.
+- **Graph output**: Saves a `NetworkX` graph and generates HTML visualizations (static + interactive).
+- **Scan management**: Query-safe scan directories and reproducible artifact paths.
 
-This repository includes a GitHub Actions security pipeline using **CodeQL** for code scanning and **Dependency Review** for pull requests.
+## Quickstart
 
-- CodeQL runs on pushes and pull requests targeting `main` / `master`, plus a weekly scheduled run (Mondays 02:56 UTC) and manual `workflow_dispatch`.
-- Dependency Review runs on pull requests to flag risky dependency changes.
-- A dependency audit (pip-audit) runs on pushes and on the weekly schedule to catch known vulnerable packages (reported in the workflow summary; it does not fail the job).
+### 1) Install
 
-Workflow definition: [.github/workflows/codeql.yml](.github/workflows/codeql.yml). Results show up under GitHub **Security → Code scanning alerts** and as checks on pull requests.
+Create/activate a virtualenv and install dependencies:
 
-## Project Structure
-
-```
-relations_extractor/
-├── main.py                  # Original monolithic script
-├── main_refactored.py       # New refactored entry point
-├── config.py                # Configuration management
-├── logger.py                # Logging setup
-├── crawler.py               # Web crawling functionality
-├── nlp_processor.py         # NLP and entity extraction
-├── nlp_enhancements.py      # Advanced NLP (coreference, entity linking, temporal)
-├── temporal_processor.py    # Temporal information extraction
-├── graph_builder.py         # Knowledge graph construction
-├── visualizer.py            # Bokeh-based graph visualization
-├── interactive_viz.py       # Plotly-based graph visualization
-├── entity_disambiguation.py # Entity deduplication and disambiguation
-├── node_cleaner.py          # Node name normalization
-├── test_temporal.py         # Test script for temporal extraction
-├── __init__.py              # Package initialization
-├── README.md                # This file
-└── requirements.txt         # Python dependencies
-```
-
-## Installation
-
-1. **Install Python dependencies**:
 ```bash
 pip install -r requirements.txt
 ```
 
-2. **Download spaCy language model**:
+Download the spaCy model used by default in `config.py`:
+
 ```bash
-python -m spacy download en_core_web_sm
+python -m spacy download en_core_web_lg
 ```
 
-## Usage
+### 2) Run a scan (script)
 
-### Basic Usage
-
-Run the refactored version:
 ```bash
 python main_refactored.py
 ```
 
-Or run the original version:
+Note: `main_refactored.py` currently runs with defaults unless you modify the call to `main(...)` or the defaults in `config.py`.
+
+### 3) Run the web UI (FastAPI)
+
 ```bash
-python main.py
+uvicorn api_server:app --host 127.0.0.1 --port 8000
 ```
 
-### Customizing Configuration
+Open `http://127.0.0.1:8000/`, enter a query, and the server will:
 
-Edit the configuration in `main_refactored.py`:
+- Reuse an existing graph under `scans/` if present
+- Otherwise run a background scan and show the HTML when it’s ready
 
-```python
-config = AppConfig.default()
+## Output Artifacts
 
-# Customize crawler settings
-config.crawler.query = "Nvidia"
-config.crawler.start_url = "https://en.wikipedia.org/wiki/Nvidia"
-config.crawler.max_pages = 10
+Each query writes into a stable scan directory under `scans/<sanitized_query>/` (see `scan_manager.py`). Typical outputs:
 
-# Customize NLP settings
-config.nlp.min_entity_length = 3
+- `knowledge_graph.pkl` (serialized graph)
+- `knowledge_graph.html` (static visualization)
+- `knowledge_graph_interactive.html` (interactive visualization)
+- `cache/` (per-scan cache)
+- `scan.log` and `status.json` (when running via the API server)
 
-# Enable translation for non-English content
-config.nlp.enable_translation = True
-config.nlp.target_language = "en"
-config.nlp.translation_provider = "google"
+## Configuration
 
-# Customize visualization settings
-config.visualization.output_file = "my_knowledge_graph.html"
-```
+Configuration is defined via dataclasses in `config.py`:
 
-### Using as a Library
+- `CrawlerConfig`: crawl/search settings (BFS, max pages, headless mode, web search, PDF downloads)
+- `NLPConfig`: spaCy model, translation toggles/provider, parallelism, disambiguation options
+- `VisualizationConfig`: graph size/limits/layout settings + interactive output
+- `AppConfig`: container with `.default()` factory
 
-```python
-from config import AppConfig
-from crawler import WebCrawler
-from nlp_processor import NLPProcessor
-from graph_builder import KnowledgeGraph
-from visualizer import GraphVisualizer
+## Optional System Dependencies
 
-# Initialize components
-config = AppConfig.default()
-crawler = WebCrawler(config.crawler)
-nlp_processor = NLPProcessor(config.nlp)
-knowledge_graph = KnowledgeGraph()
+Some features require additional non-Python prerequisites:
 
-# Crawl and process
-crawled_contents, _ = await crawler.crawl(
-    "https://example.com",
-    "search query",
-    max_pages=5
-)
+- **Browser automation**: `nodriver` requires a working Chrome/Chromium install.
+- **OCR** (images): `pytesseract` requires the Tesseract binary installed and available on `PATH`.
+- **Advanced PDF tables** (optional): `tabula` requires Java (tabula-py).
 
-for content in crawled_contents:
-    entities, relations = nlp_processor.extract_entities_and_relations(content)
-    knowledge_graph.merge_entities_and_relations(entities, relations)
+If these aren’t available, the pipeline will still run, but document/OCR/table extraction may be reduced.
 
-# Visualize
-visualizer = GraphVisualizer(config.visualization)
-visualizer.visualize(knowledge_graph.get_graph())
-```
+## Security Scanning (CI)
 
-## Components
+GitHub Actions workflow: [.github/workflows/codeql.yml](.github/workflows/codeql.yml)
 
-### 1. Configuration (`config.py`)
-Manages all application settings using dataclasses:
-- `CrawlerConfig`: Web crawler settings
-- `NLPConfig`: NLP processing settings
-- `VisualizationConfig`: Graph visualization settings
-- `AppConfig`: Main configuration container
+- **CodeQL** runs on pushes and PRs to `main`/`master`, plus a weekly schedule (Mondays 02:56 UTC) and manual `workflow_dispatch`.
+- **Dependency Review (PR diffs)** runs only on pull requests (it requires a PR diff context).
+- **Dependency audit (pip-audit)** runs and reports findings in the workflow summary, but is configured to be **non-blocking** (does not fail the job).
 
-### 2. Logger (`logger.py`)
-Sets up logging with:
-- Console output with timestamps
-- File logging to `logs/` directory
-- Configurable log levels
+## Project Layout (high level)
 
-### 3. Web Crawler (`crawler.py`)
-Handles web page crawling:
-- Async crawling with nodriver
-- Content extraction with trafilatura
-- Related link discovery
-- URL validation and filtering
+- `main_refactored.py`: main scan orchestration entry point
+- `api_server.py`: FastAPI server + minimal browser UI for running/serving scans
+- `crawler.py`: browser-based crawler + extraction + URL discovery
+- `web_search.py`: search engine scraping + download helpers
+- `document_extractor.py`: PDF/image download + text/table extraction
+- `nlp_processor.py` / `nlp_enhancements.py`: entity/relation extraction and enhancements
+- `graph_builder.py`: knowledge graph building/merging
+- `visualizer.py` / `interactive_viz.py`: HTML graph visualizations
+- `scan_manager.py`: standardized scan directory + artifact paths
 
-### 4. NLP Processor (`nlp_processor.py`)
-Extracts entities and relationships:
-- Named entity recognition with spaCy
-- Relationship extraction between entities
-- Configurable entity filtering
-
-### 5. Knowledge Graph (`graph_builder.py`)
-Builds and manages the graph:
-- Entity and relation aggregation
-- Graph statistics
-- Graph filtering capabilities
-- NetworkX integration
-
-### 6. Visualizer (`visualizer.py`)
-Creates interactive visualizations:
-- Bokeh-based interactive plots
-- Node and edge hover tooltips
-- Customizable styling
-- Searchable control panel for nodes and connections
-- Pinned connections side panel for quick reference
-- HTML output
-
-#### Exploring the graph
-
-The generated HTML includes a search bar on the right-hand panel:
-
-- **Type any name, keyword, or QID** to highlight matching nodes and relationships in real time.
-- **Results list** summarises matched entities and connections so you can jump between them quickly.
-- **Clear search** resets the view to the original layout and styling.
-- **Pinned connections** capture any edge you click, making it easy to keep important evidence in sight while you explore.
-
-### 7. Temporal Processor (`temporal_processor.py`)
-Extracts temporal information from text:
-- Date extraction using spaCy and dateparser
-- Date normalization to YYYY-MM-DD format
-- Association of dates with relationships
-- Support for date ranges (e.g., "2020-2021")
-- Recognition of various date formats (full dates, years, months)
-
-#### Temporal Analysis Features
-
-The temporal processor automatically extracts and normalizes dates from text, associating them with relationships. For example:
-
-```python
-# Text: "Apple was founded by Steve Jobs in 1976"
-# Result: Relationship with [dates:1976-01-01]
-
-# Text: "Microsoft was founded on April 4, 1975"
-# Result: Relationship with [dates:1975-04-04]
-```
-
-Dates are displayed in:
-- **Hover tooltips**: Quick view of timeline information
-- **Pinned connections**: Full temporal context with 📅 timeline indicators
-- **Graph edges**: Stored in the `dates` attribute
-
-To test temporal extraction:
-```bash
-python test_temporal.py
-```
-
-This feature enables answering "when" questions and tracking the evolution of relationships over time.
-
-## Configuration Options
-
-### Crawler Configuration
-- `query`: Search query for finding related pages
-- `start_url`: Starting URL for crawling
-- `max_pages`: Maximum number of pages to crawl
-- `page_timeout`: Timeout for page loading (seconds)
-- `browser_headless`: Run browser in headless mode
-
-### NLP Configuration
-- `spacy_model`: spaCy model to use
-- `min_entity_length`: Minimum length for entity text
-- `extract_comments`: Include comments in extraction
-- `extract_tables`: Include tables in extraction
-- `enable_translation`: Enable automatic translation (default: True)
-- `target_language`: Target language for translation (default: "en")
-- `translation_provider`: Translation service provider (default: "google")
-
-### Visualization Configuration
-- `output_file`: Output HTML filename
-- `plot_title`: Graph title
-- `x_range`, `y_range`: Plot dimensions
-- `scale`: Graph layout scale
-- `center`: Graph center point
-- `max_nodes`: Maximum nodes to display (default: 200) - filters by importance
-- `min_edge_confidence`: Minimum confidence threshold for edges (optional)
-- `layout_iterations`: Number of spring layout iterations (default: 80)
-- `layout_spread`: Multiplier for node spacing (default: 2.5)
-- `layout_force`: Force-directed layout strength (optional)
-- `layout_seed`: Random seed for reproducible layouts (default: 42)
-- `node_size_range`: Min and max node sizes (default: [12, 34])
-- `edge_width_range`: Min and max edge widths (default: [1.0, 4.5])
-- `auto_range`: Auto-adjust plot bounds (default: True)
-
-## Output
-
-The application generates:
-1. **Log files**: In `logs/knowledge_graph.log`
-2. **HTML visualization**: Interactive graph (default: `focused_knowledge_graph.html`)
-3. **Console output**: Progress and statistics
-
-## Requirements
-
-- Python 3.8+
-- nodriver
-- spacy (with en_core_web_lg model recommended)
-- networkx
-- bokeh
-- plotly (for interactive_viz.py)
-- trafilatura
-- translators (for multilingual support)
-- dateparser (for temporal analysis)
-- Other dependencies in `requirements.txt`
-
-## Improvements Over Original
-
-1. **Modularity**: Code split into logical components
-2. **Configuration**: Centralized, type-safe configuration
-3. **Logging**: Comprehensive logging throughout
-4. **Error Handling**: Better error handling and reporting
-5. **Type Hints**: Full type hints for better IDE support
-6. **Documentation**: Extensive docstrings and comments
-7. **Extensibility**: Easy to extend and modify
-8. **Testing**: Structure supports unit testing
-9. **Maintainability**: Cleaner, more readable code
-
-## Future Enhancements
-
-- [x] ~~Add translation support for multilingual content~~
-- [x] ~~Entity deduplication~~
-- [x] ~~BFS crawling strategy~~
-- [x] ~~Graph filtering (isolated nodes, relevance)~~
-- [x] ~~Temporal analysis with date extraction~~
-- [ ] Advanced entity disambiguation using Wikidata QIDs
-- [ ] Context vector-based disambiguation fallback
-- [ ] Add unit tests
-- [ ] Support for multiple NLP models
-- [ ] Database persistence for large graphs
-- [ ] REST API for graph queries
-- [ ] Export to various formats (JSON, GraphML, etc.)
-- [ ] Incremental crawling and updating
-- [ ] Multi-language NLP models
-- [ ] Temporal querying and timeline visualization
-
-## Documentation
-
-- [README.md](README.md) - Main documentation (this file)
-- [TRANSLATION.md](TRANSLATION.md) - Translation features and usage
-- [ENTITY_DEDUPLICATION.md](ENTITY_DEDUPLICATION.md) - Entity deduplication details
-- [BFS_CRAWLING.md](BFS_CRAWLING.md) - BFS crawling and graph filtering
-- See inline code documentation for detailed API information
-
-## License
-
-MIT License
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
