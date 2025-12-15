@@ -44,6 +44,25 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 
+from single_instance import hold_app_mutex
+from updater import check_for_updates, perform_update
+
+
+def _prompt_update_and_install(release_data: dict) -> None:
+    """Ask the user via a native Windows dialog, then run installer if accepted."""
+
+    try:
+        import ctypes
+
+        # MB_YESNO = 0x04, IDYES = 6
+        mbox = ctypes.windll.user32.MessageBoxW
+        resp = mbox(0, "A new update is available. Download and install now?", "Update Found", 0x04)
+        if int(resp) == 6:
+            perform_update(release_data, silent=True)
+    except Exception:
+        # If anything goes wrong (no UI, etc.), skip updates quietly.
+        return
+
 
 class ExternalLinksPage(QWebEnginePage):
     def __init__(self, parent=None, emit_log=None):
@@ -1163,6 +1182,16 @@ class MainWindow(QMainWindow):
 
 
 def main() -> None:
+    # Hold a named mutex for the lifetime of this process so Inno Setup (AppMutex)
+    # can detect/rendezvous with a running app during updates.
+    _mutex_handle = hold_app_mutex()
+
+    # Optional escape hatch for development.
+    if not os.environ.get("SAG_DISABLE_UPDATES"):
+        release = check_for_updates(timeout_s=4.0)
+        if release:
+            _prompt_update_and_install(release)
+
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()

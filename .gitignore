@@ -14,8 +14,12 @@ Scripts/
 Lib/
 Include/
 share/
+build/
+dist/
+SearchANDGraph.spec
 pyvenv.cfg
-
+installer.iss
+Output/
 # Logs / runtime artifacts
 logs/
 *.log
