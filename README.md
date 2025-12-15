@@ -16,6 +16,13 @@ A Python application that crawls web pages, extracts named entities and their re
 - **Modular Design**: Clean, maintainable code structure
 - **Comprehensive Logging**: Detailed logging for debugging and monitoring
 
+## Security Scanning (CI)
+
+This repository includes a GitHub Actions security pipeline using **CodeQL** for code scanning and **Dependency Review** for pull requests.
+
+- CodeQL runs on pushes/PRs to the default branches and on a weekly schedule.
+- Dependency Review runs on pull requests to flag risky dependency changes.
+
 ## Project Structure
 
 ```
