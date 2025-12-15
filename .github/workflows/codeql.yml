@@ -54,7 +54,19 @@ jobs:
           from pathlib import Path
           src = Path('requirements.txt')
           dst = Path('.ci-requirements-audit.txt')
-          lines = src.read_text(encoding='utf-8').splitlines()
+          data = src.read_bytes()
+
+          decoded = None
+          for enc in ('utf-8-sig', 'utf-8', 'utf-16', 'utf-16-le', 'utf-16-be', 'cp1252', 'latin-1'):
+            try:
+              decoded = data.decode(enc)
+              break
+            except UnicodeDecodeError:
+              continue
+          if decoded is None:
+            decoded = data.decode('utf-8', errors='replace')
+
+          lines = decoded.splitlines()
           out = []
           for line in lines:
             s = line.strip()
