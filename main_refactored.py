@@ -215,6 +215,9 @@ async def main(
     max_pages: int | None = None,
     add_timestamp: bool = False,
     base_dir: str = "scans",
+    browser_headless: bool | None = None,
+    enable_web_search: bool | None = None,
+    web_search_download_pdfs: bool | None = None,
 ):
     """Run a full scan and build visualizations.
 
@@ -241,6 +244,14 @@ async def main(
         config.crawler.start_url = start_url
     if max_pages is not None:
         config.crawler.max_pages = max_pages
+
+    # Optional UI overrides
+    if browser_headless is not None:
+        config.crawler.browser_headless = browser_headless
+    if enable_web_search is not None:
+        config.crawler.enable_web_search = enable_web_search
+    if web_search_download_pdfs is not None:
+        config.crawler.web_search_download_pdfs = web_search_download_pdfs
     
     # IMPORTANT: Get query-specific paths
     # This creates a separate folder for each query to avoid merging different scans

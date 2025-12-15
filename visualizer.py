@@ -12,12 +12,16 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from bokeh.layouts import column, row
-from bokeh.events import DocumentReady
+from bokeh.io import save
+try:
+    from bokeh.events import DocumentReady
+except Exception:  # pragma: no cover
+    DocumentReady = None  # type: ignore[assignment]
 from bokeh.models import (
     Button, CheckboxGroup, ColumnDataSource, CustomJS, Div, 
     HoverTool, Range1d, RangeSlider, Select, Slider, TapTool, TextInput
 )
-from bokeh.plotting import figure, from_networkx, output_file, show
+from bokeh.plotting import figure, from_networkx, output_file
 from config import VisualizationConfig
 from logger import setup_logger
 
@@ -149,158 +153,6 @@ class GraphVisualizer:
         except Exception:
             pass
 
-        # === Welcome Pop-up (will be shown on page load) ===
-        welcome_popup = Div(
-            text="""
-            <div id="welcome-overlay" style="
-                position: fixed;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                background-color: rgba(0, 0, 0, 0.6);
-                z-index: 9999;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-            ">
-                <div id="welcome-panel" style="
-                    background-color: white;
-                    padding: 30px;
-                    border-radius: 12px;
-                    max-width: 600px;
-                    box-shadow: 0 10px 40px rgba(0,0,0,0.3);
-                    position: relative;
-                ">
-                    <button id="welcome-close-button" aria-label="Close" title="Close" style="
-                        position: absolute;
-                        top: 10px;
-                        right: 10px;
-                        background: transparent;
-                        border: none;
-                        font-size: 20px;
-                        cursor: pointer;
-                        line-height: 1;
-                    ">×</button>
-                    <h2 style='margin: 0 0 20px 0; color: #0066cc; border-bottom: 3px solid #0066cc; padding-bottom: 10px;'>
-                        🔍 Knowledge Graph Explorer
-                    </h2>
-                    <div style='font-size: 0.95em; line-height: 1.6; color: #333;'>
-                        <p style='margin: 0 0 15px 0;'>
-                            <strong>Welcome!</strong> This interactive graph visualizes entities and their relationships extracted from web sources.
-                        </p>
-                        <h3 style='margin: 15px 0 10px 0; font-size: 1em; color: #0066cc;'>✨ Quick Start:</h3>
-                        <ul style='margin: 5px 0 15px 20px; padding: 0;'>
-                            <li><strong>Click nodes</strong> to see detailed entity information</li>
-                            <li><strong>Click edges</strong> to view relationship evidence with sources</li>
-                            <li><strong>Search</strong> using the search bar on the right</li>
-                            <li><strong>Filter</strong> by entity type, confidence, or connections</li>
-                            <li><strong>Zoom & Pan</strong> to explore different areas</li>
-                        </ul>
-                        <h3 style='margin: 15px 0 10px 0; font-size: 1em; color: #0066cc;'>🎛️ Controls:</h3>
-                        <ul style='margin: 5px 0 15px 20px; padding: 0;'>
-                            <li><strong>Left Panel:</strong> Pinned connection details</li>
-                            <li><strong>Right Panel:</strong> Search, filters, and display options</li>
-                        </ul>
-                    </div>
-                    <button id="welcome-start-button" style="
-                        background-color: #0066cc;
-                        color: white;
-                        border: none;
-                        padding: 12px 30px;
-                        border-radius: 6px;
-                        cursor: pointer;
-                        font-size: 1em;
-                        font-weight: bold;
-                        margin-top: 10px;
-                        width: 100%;
-                    ">
-                        Start Exploring →
-                    </button>
-                </div>
-            </div>
-            """,
-            width=0,
-            height=0
-        )
-
-        # Wire up welcome overlay dismissal using Bokeh JS (works better under CSP than inline handlers).
-        plot.js_on_event(
-            DocumentReady,
-            CustomJS(
-                code="""
-                    (function () {
-                        // Guard: avoid double-binding if Bokeh triggers multiple DocumentReady runs.
-                        if (window.__kgWelcomeWired) return;
-                        window.__kgWelcomeWired = true;
-
-                        function getOverlay() {
-                            return document.getElementById('welcome-overlay');
-                        }
-                        function getPanel() {
-                            return document.getElementById('welcome-panel');
-                        }
-                        function hideOverlay() {
-                            const overlay = getOverlay();
-                            if (!overlay) return;
-                            overlay.style.display = 'none';
-                            overlay.style.pointerEvents = 'none';
-                        }
-
-                        // Use event delegation (capture phase) so it still works even if the overlay DOM is re-rendered.
-                        document.addEventListener('click', function (e) {
-                            const overlay = getOverlay();
-                            if (!overlay || overlay.style.display === 'none') return;
-
-                            let target = e && e.target ? e.target : null;
-                            if (!target) return;
-                            // If the click lands on a text node inside a button, promote to its parent element.
-                            if (target.nodeType === 3 && target.parentElement) {
-                                target = target.parentElement;
-                            }
-
-                            // Click on X or Start Exploring
-                            const onClose = target.closest && target.closest('#welcome-close-button');
-                            const onStart = target.closest && target.closest('#welcome-start-button');
-                            if (onClose || onStart) {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                hideOverlay();
-                                return;
-                            }
-
-                            // Click outside the panel closes the overlay.
-                            const panel = getPanel();
-                            if (panel && !(panel.contains(target))) {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                hideOverlay();
-                                return;
-                            }
-                        }, true);
-
-                        document.addEventListener('keydown', function (e) {
-                            if (e && (e.key === 'Escape' || e.key === 'Esc')) {
-                                hideOverlay();
-                            }
-                        }, true);
-
-                        // If Bokeh replaces the overlay node, ensure it still sits on top and is clickable.
-                        try {
-                            const obs = new MutationObserver(function () {
-                                const overlay = getOverlay();
-                                if (!overlay) return;
-                                overlay.style.zIndex = '9999';
-                            });
-                            obs.observe(document.documentElement || document.body, { childList: true, subtree: true });
-                        } catch (err) {
-                            // ignore
-                        }
-                    })();
-                """
-            )
-        )
-
         # Build search experience (no intro tip)
         search_input = TextInput(
             title="Search nodes",
@@ -309,7 +161,7 @@ class GraphVisualizer:
         )
 
         search_results_default = (
-            "<div style='padding: 12px; color: #555; font-size: 0.9em; background-color: #ffffff; border: 1px solid #dcdfe6; border-radius: 6px; max-height: 180px; overflow-y: auto;'>"
+            "<div style='padding: 10px 12px; color: #555; font-size: 0.9em; background-color: #ffffff; border: 1px solid #dcdfe6; border-radius: 6px; max-height: 120px; overflow-y: auto;'>"
             "Start typing to highlight matching nodes."
             "</div>"
         )
@@ -317,8 +169,20 @@ class GraphVisualizer:
         search_results = Div(
             text=search_results_default,
             width=350,
-            height=150,
-            sizing_mode="fixed"
+            sizing_mode="stretch_width",
+            margin=(0, 0, 8, 0)
+        )
+
+        node_details = Div(
+            text=(
+                "<div style='padding: 10px 12px; color: #555; font-size: 0.9em; background-color: #ffffff; "
+                "border: 1px solid #dcdfe6; border-radius: 6px; max-height: 160px; overflow-y: auto;'>"
+                "Click a node to see details here."
+                "</div>"
+            ),
+            width=350,
+            sizing_mode="stretch_width",
+            margin=(0, 0, 10, 0)
         )
 
         clear_button = Button(label="Clear search", button_type="default", width=130)
@@ -453,13 +317,13 @@ class GraphVisualizer:
         )
         documents_details = Div(
             text=(
-                "<div style='padding: 12px; color: #555; font-size: 0.9em; background-color: #ffffff; border: 1px solid #dcdfe6; border-radius: 6px;'>"
+                "<div style='padding: 10px 12px; color: #555; font-size: 0.9em; background-color: #ffffff; border: 1px solid #dcdfe6; border-radius: 6px;'>"
                 "No documents detected yet. If PDFs were downloaded, re-run the scan/graph generation so they get indexed here."
                 "</div>"
             ) if not doc_option_pairs else "",
             width=350,
-            height=170,
-            sizing_mode="fixed"
+            sizing_mode="stretch_width",
+            margin=(0, 0, 10, 0)
         )
 
         doc_index_json = json.dumps(documents_index)
@@ -468,6 +332,75 @@ class GraphVisualizer:
             CustomJS(
                 args=dict(details_div=documents_details, doc_index_json=doc_index_json),
                 code="""
+                    function ensureGlobalDelegation() {
+                        // Attach once: handles <a> clicks inside Bokeh shadow DOM and pinned remove buttons.
+                        if (document.__kgGlobalDelegationAttached) return;
+                        document.__kgGlobalDelegationAttached = true;
+
+                        document.addEventListener('click', function (e) {
+                            const path = (e && e.composedPath) ? e.composedPath() : [];
+
+                            // 1) Pinned remove buttons (inside shadow DOM)
+                            let removeBtn = null;
+                            for (const n of path) {
+                                if (n && n.getAttribute && n.getAttribute('data-action') === 'remove') {
+                                    removeBtn = n;
+                                    break;
+                                }
+                            }
+                            if (removeBtn) {
+                                const targetId = removeBtn.getAttribute('data-target');
+                                if (targetId) {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    try {
+                                        if (window.__kgPinnedRemoveById && typeof window.__kgPinnedRemoveById === 'function') {
+                                            // Prefer stateful removal so deleted pins don't come back on re-render.
+                                            window.__kgPinnedRemoveById(targetId);
+                                        } else {
+                                            const root = (removeBtn.getRootNode && removeBtn.getRootNode()) ? removeBtn.getRootNode() : document;
+                                            let el = null;
+                                            if (root && root.querySelector) {
+                                                el = root.querySelector('#' + targetId);
+                                            }
+                                            if (!el) {
+                                                el = document.getElementById(targetId);
+                                            }
+                                            if (el) el.remove();
+                                        }
+                                    } catch (err) {
+                                        // no-op
+                                    }
+                                }
+                                return;
+                            }
+
+                            // 2) External links inside Bokeh widgets (shadow DOM retargeting)
+                            let anchor = null;
+                            for (const n of path) {
+                                if (n && n.tagName && String(n.tagName).toLowerCase() === 'a' && n.href) {
+                                    anchor = n;
+                                    break;
+                                }
+                            }
+                            if (!anchor) return;
+                            const href = String(anchor.href || '');
+                            if (!href) return;
+                            // Only intercept real external/file links.
+                            if (!(href.startsWith('http://') || href.startsWith('https://') || href.startsWith('file://'))) return;
+                            // Try to open in a new window/tab (Qt WebEngine createWindow will forward externally).
+                            try {
+                                const w = window.open(href, anchor.target || '_blank');
+                                if (w) {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                }
+                            } catch (err) {
+                                // If window.open fails, fall back to default browser behavior.
+                            }
+                        }, true);
+                    }
+
                     const v = cb_obj.value;
                     const index = JSON.parse(doc_index_json || '{}');
                     const item = index[v];
@@ -480,7 +413,7 @@ class GraphVisualizer:
                     const connections = (item.connections || []).slice(0, 25);
                     const nodes = (item.nodes || []).slice(0, 25);
 
-                    let html = "<div style='padding:12px; background-color:#ffffff; border:1px solid #dcdfe6; border-radius:6px; max-height:160px; overflow-y:auto;'>";
+                    let html = "<div style='padding:12px; background-color:#ffffff; border:1px solid #dcdfe6; border-radius:6px;'>";
                     html += `<div style='margin-bottom:8px;'><a href='${v}' target='_blank' style='color:#0066cc; text-decoration:none;'>📄 Open document</a></div>`;
                     if (connections.length) {
                         html += "<div style='font-size:0.9em; color:#12325b; margin-bottom:6px;'><strong>Linked connections</strong></div>";
@@ -500,6 +433,9 @@ class GraphVisualizer:
                     }
                     html += "</div>";
                     details_div.text = html;
+
+                    // Make sure external link clicks work inside embedded shadow DOM.
+                    ensureGlobalDelegation();
                 """
             )
         )
@@ -510,7 +446,7 @@ class GraphVisualizer:
             first_item = documents_index.get(first, {})
             connections = (first_item.get('connections') or [])[:25]
             nodes = (first_item.get('nodes') or [])[:25]
-            html = "<div style='padding:12px; background-color:#ffffff; border:1px solid #dcdfe6; border-radius:6px; max-height:160px; overflow-y:auto;'>"
+            html = "<div style='padding:12px; background-color:#ffffff; border:1px solid #dcdfe6; border-radius:6px;'>"
             html += f"<div style='margin-bottom:8px;'><a href='{first}' target='_blank' style='color:#0066cc; text-decoration:none;'>📄 Open document</a></div>"
             if connections:
                 html += "<div style='font-size:0.9em; color:#12325b; margin-bottom:6px;'><strong>Linked connections</strong></div>"
@@ -531,11 +467,12 @@ class GraphVisualizer:
             width=350
         )
 
-        # Right panel: Search, Documents, and Filters
+        # Right panel: Search, Node details, Documents, and Filters
         right_panel = column(
             search_input,
             clear_button,
             search_results,
+            node_details,
             documents_intro,
             documents_select,
             documents_details,
@@ -549,19 +486,11 @@ class GraphVisualizer:
             show_labels_checkbox,
             color_scheme_select,
             size_scheme_select,
-            sizing_mode="fixed",
-            width=370,
-            height=800
+            sizing_mode="stretch_height",
+            width=370
         )
 
-        # Make the right panel scrollable so the documents dropdown is always reachable.
-        try:
-            right_panel.styles = {
-                'overflow-y': 'auto',
-                'overflow-x': 'hidden'
-            }
-        except Exception:
-            pass
+        # Keep the right panel non-scrollable; show controls in full.
 
         # Left panel: Pinned connections only
         left_panel = column(
@@ -716,7 +645,7 @@ class GraphVisualizer:
                 const nodeList = matchedNodeSummaries.slice(0, 8).join('');
                 const nodeCount = matchedNodeIndices.length;
 
-                let summaryHtml = `<div style='padding:12px; background-color:#ffffff; border:1px solid #dcdfe6; border-radius:6px; max-height:180px; overflow-y:auto;'>`;
+                let summaryHtml = `<div style='padding:10px 12px; background-color:#ffffff; border:1px solid #dcdfe6; border-radius:6px; max-height:140px; overflow-y:auto;'>`;
                 summaryHtml += `<div style='color:#1b4b8f; font-size:0.95em; margin-bottom:8px;'>Found <strong>${nodeCount}</strong> matching node${nodeCount === 1 ? '' : 's'}.</div>`;
                 if (highlightedEdgeCount > 0) {
                     summaryHtml += `<div style='color:#577399; font-size:0.85em; margin-bottom:10px;'>Highlighted ${highlightedEdgeCount} connecting edge${highlightedEdgeCount === 1 ? '' : 's'} for context.</div>`;
@@ -736,11 +665,11 @@ class GraphVisualizer:
         search_input.js_on_change("value", search_callback)
         clear_button.js_on_event("button_click", CustomJS(args=dict(search_input=search_input), code="search_input.value = '';"))
 
-        # === Node Click Callback - Show node details in pinned panel ===
+        # === Node Click Callback - Show node details in the right panel ===
         node_tap_callback = CustomJS(
             args=dict(
                 node_source=graph_renderer.node_renderer.data_source,
-                pinned_div=pinned_panel
+                details_div=node_details
             ),
             code="""
                 const selected = node_source.selected.indices;
@@ -757,12 +686,10 @@ class GraphVisualizer:
                 const degree = nodeData['degree'][idx] || 0;
                 
                 let html = `
-                    <div style='padding: 16px; background-color: #ffffff; border-radius: 6px; border: 2px solid #0066cc; min-height: 200px;'>
-                        <h3 style='margin: 0 0 12px 0; font-size: 1.1em; color: #0066cc; border-bottom: 2px solid #0066cc; padding-bottom: 8px;'>
-                            🔍 Node: ${displayName}
-                        </h3>
-                        <div style='margin-bottom: 12px; padding: 10px; background-color: #e8f4f8; border-radius: 4px;'>
-                            <p style='margin: 0 0 8px 0; font-size: 0.85em; color: #666;'>
+                    <div style='padding: 10px 12px; background-color: #ffffff; border-radius: 6px; border: 1px solid #dcdfe6; max-height: 160px; overflow-y: auto;'>
+                        <div style='margin: 0 0 8px 0; font-size: 0.95em; color: #0066cc; font-weight: 700;'>🔍 Node: ${displayName}</div>
+                        <div style='margin-bottom: 8px; padding: 8px; background-color: #e8f4f8; border-radius: 4px;'>
+                            <p style='margin: 0 0 6px 0; font-size: 0.85em; color: #666;'>
                                 <strong>Type:</strong> <span style='padding: 2px 8px; background-color: #0066cc; color: white; border-radius: 3px; font-size: 0.8em;'>${label}</span>
                             </p>
                 `;
@@ -785,7 +712,7 @@ class GraphVisualizer:
                     </div>
                 </div>`;
                 
-                pinned_div.text = html;
+                details_div.text = html;
             """
         )
         
@@ -1077,15 +1004,81 @@ class GraphVisualizer:
         
         size_scheme_select.js_on_change("value", size_scheme_callback)
 
-        # Set output file and display
-        output_file(self.config.output_file)
+        # Set output file (inline resources so HTML works offline / inside embedded viewers)
+        output_file(self.config.output_file, mode="inline")
         logger.info(f"Visualization saved to: {self.config.output_file}")
         
         # Layout: Left panel (pinned), center (plot), right panel (search + filters)
-        # Add welcome popup as invisible overlay
         main_layout = row(left_panel, plot, right_panel, sizing_mode="stretch_height")
-        final_layout = column(welcome_popup, main_layout, sizing_mode="stretch_both")
-        show(final_layout)
+
+        # Ensure clicks inside Bokeh shadow DOM behave in embedded viewers (Qt WebEngine):
+        # - Open file/http links reliably
+        # - Allow pinned-item removal buttons to work even though they live in a shadow root
+        if DocumentReady is not None:
+            plot.js_on_event(
+                DocumentReady,
+                CustomJS(
+                    code="""
+                        (function installKgDelegation() {
+                            if (document.__kgGlobalDelegationAttached) return;
+                            document.__kgGlobalDelegationAttached = true;
+
+                            document.addEventListener('click', function (e) {
+                                const path = (e && e.composedPath) ? e.composedPath() : [];
+
+                                // 1) Pinned remove buttons
+                                for (const n of path) {
+                                    if (n && n.getAttribute && n.getAttribute('data-action') === 'remove') {
+                                        const targetId = n.getAttribute('data-target');
+                                        if (targetId) {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            try {
+                                                if (window.__kgPinnedRemoveById && typeof window.__kgPinnedRemoveById === 'function') {
+                                                    window.__kgPinnedRemoveById(targetId);
+                                                } else {
+                                                    const root = (n.getRootNode && n.getRootNode()) ? n.getRootNode() : document;
+                                                    let el = null;
+                                                    if (root && root.querySelector) {
+                                                        el = root.querySelector('#' + targetId);
+                                                    }
+                                                    if (!el) {
+                                                        el = document.getElementById(targetId);
+                                                    }
+                                                    if (el) el.remove();
+                                                }
+                                            } catch (err) {
+                                                // no-op
+                                            }
+                                        }
+                                        return;
+                                    }
+                                }
+
+                                // 2) External/file links inside shadow DOM
+                                for (const n of path) {
+                                    if (n && n.tagName && String(n.tagName).toLowerCase() === 'a' && n.href) {
+                                        const href = String(n.href || '');
+                                        if (href.startsWith('http://') || href.startsWith('https://') || href.startsWith('file://')) {
+                                            // Force a navigation request (Qt will intercept and open externally)
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            try {
+                                                window.location.href = href;
+                                            } catch (err) {
+                                                // no-op
+                                            }
+                                            return;
+                                        }
+                                    }
+                                }
+                            }, true);
+                        })();
+                    """
+                ),
+            )
+        # Save without launching an external browser (desktop UI loads the file itself)
+        save(main_layout)
 
     def _prepare_graph(self, graph: nx.Graph) -> nx.Graph:
         """Apply readability filters before rendering the graph."""
@@ -1710,86 +1703,139 @@ class GraphVisualizer:
 
                 // Create a stable key so repeated clicks don't create duplicates.
                 const rawKey = [String(start), String(end)].sort().join('||');
-                const edgeKey = rawKey.replace(/[^a-zA-Z0-9_\-]+/g, '_').slice(0, 120);
+                // Keep IDs simple/safe (avoid relying on CSS.escape for selectors)
+                const edgeKey = rawKey.replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 120);
                 const connectionId = 'conn_' + edgeKey;
 
-                function syncModelFromDom(divElement) {
-                    try {
-                        div.text = divElement.innerHTML;
-                    } catch (e) {}
+                // Base HTML shell (matches the Python Div's initial content).
+                const PINNED_BASE_START = `
+                    <div style='padding: 20px; background-color: #f8f9fa; border-right: 2px solid #dee2e6; height: 100%; overflow-y: auto;'>
+                        <h3 style='margin-top: 0; color: #0066cc; border-bottom: 2px solid #0066cc; padding-bottom: 10px;'>
+                            📌 Pinned Connections
+                        </h3>
+                        <p style='color: #666; font-size: 0.9em; line-height: 1.5;'>
+                            Click on connections (edges) to pin them here. Each pinned item can be removed individually.
+                        </p>
+                        <div id='pinned-items' style='margin-top: 15px;'>`;
+                const PINNED_BASE_END = `</div></div>`;
+
+                function pinnedItemHTML(item) {
+                    return `
+                        <div id="${item.id}" style="margin-bottom: 15px; padding: 12px; background-color: white; border: 1px solid #0066cc; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+                            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 10px;">
+                                <h4 style="margin: 0; color: #0066cc; font-size: 1em; flex-grow: 1;">
+                                    🔗 ${item.startDisplay} → ${item.endDisplay}
+                                </h4>
+                                <button data-action="remove" data-target="${item.id}"
+                                        style="background-color: #dc3545; color: white; border: none; border-radius: 3px; padding: 4px 8px; cursor: pointer; font-size: 0.85em; margin-left: 8px; flex-shrink: 0;">
+                                    ✕
+                                </button>
+                            </div>
+                            <div style="font-size: 0.85em;">${item.reasons}</div>
+                        </div>
+                    `;
+                }
+
+                function ensurePinnedState() {
+                    if (!window.__kgPinnedState) {
+                        window.__kgPinnedState = { items: [] };
+                    }
+                    // Keep stable references so other global handlers can persist removals.
+                    window.__kgPinnedDivModel = div;
+
+                    window.__kgPinnedRender = function () {
+                        const st = window.__kgPinnedState || { items: [] };
+                        const html = PINNED_BASE_START + (st.items || []).map(pinnedItemHTML).join('') + PINNED_BASE_END;
+                        // Keep Bokeh model in sync so removed pins don't reappear.
+                        window.__kgPinnedDivModel.text = html;
+                    };
+
+                    window.__kgPinnedRemoveById = function (targetId) {
+                        const st = window.__kgPinnedState || { items: [] };
+                        st.items = (st.items || []).filter(it => it && it.id !== targetId);
+                        window.__kgPinnedState = st;
+                        if (window.__kgPinnedRender) window.__kgPinnedRender();
+                    };
+
+                    return window.__kgPinnedState;
                 }
 
                 function ensurePinnedDelegation(divElement) {
-                    const pinnedItemsDiv = divElement.querySelector('#pinned-items');
-                    if (!pinnedItemsDiv) return;
-                    if (pinnedItemsDiv.__handlerAttached) return;
-                    pinnedItemsDiv.__handlerAttached = true;
-                    pinnedItemsDiv.addEventListener('click', function (e) {
-                        const t = e.target;
-                        if (!t) return;
-                        const btn = t.closest && t.closest('button[data-action="remove"]');
-                        if (!btn) return;
-                        const targetId = btn.getAttribute('data-target');
-                        if (!targetId) return;
-                        const el = divElement.querySelector('#' + CSS.escape(targetId));
-                        if (el) {
-                            el.remove();
-                            syncModelFromDom(divElement);
+                    // Attach a single document-level handler (capture) that is Shadow-DOM-safe.
+                    // Bokeh widgets render inside shadow roots; regular document.getElementById won't find nodes there.
+                    if (document.__kgPinnedHandlerAttached) return;
+                    document.__kgPinnedHandlerAttached = true;
+                    document.addEventListener('click', function (e) {
+                        const path = (e && e.composedPath) ? e.composedPath() : [];
+
+                        // Remove pinned items
+                        let btn = null;
+                        for (const n of path) {
+                            if (n && n.getAttribute && n.getAttribute('data-action') === 'remove') {
+                                btn = n;
+                                break;
+                            }
                         }
-                    });
+                        if (btn) {
+                            const targetId = btn.getAttribute('data-target');
+                            if (targetId) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                try {
+                                    if (window.__kgPinnedRemoveById && typeof window.__kgPinnedRemoveById === 'function') {
+                                        window.__kgPinnedRemoveById(targetId);
+                                    } else {
+                                        const root = (btn.getRootNode && btn.getRootNode()) ? btn.getRootNode() : document;
+                                        let el = null;
+                                        if (root && root.querySelector) {
+                                            el = root.querySelector('#' + targetId);
+                                        }
+                                        if (!el) {
+                                            el = document.getElementById(targetId);
+                                        }
+                                        if (el) el.remove();
+                                    }
+                                } catch (err) {
+                                    // no-op
+                                }
+                            }
+                            return;
+                        }
+
+                        // Open external/file links reliably from within shadow DOM
+                        let anchor = null;
+                        for (const n of path) {
+                            if (n && n.tagName && String(n.tagName).toLowerCase() === 'a' && n.href) {
+                                anchor = n;
+                                break;
+                            }
+                        }
+                        if (!anchor) return;
+                        const href = String(anchor.href || '');
+                        if (!(href.startsWith('http://') || href.startsWith('https://') || href.startsWith('file://'))) return;
+                        try {
+                            const w = window.open(href, anchor.target || '_blank');
+                            if (w) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                            }
+                        } catch (err) {
+                            // allow default
+                        }
+                    }, true);
                 }
-                
-                // Create pinned item HTML (no inline onclick; CSP-safe). If it already exists, we will move it to top.
-                const newItemHTML = `
-                    <div id="${connectionId}" style="margin-bottom: 15px; padding: 12px; background-color: white; border: 1px solid #0066cc; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
-                        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 10px;">
-                            <h4 style="margin: 0; color: #0066cc; font-size: 1em; flex-grow: 1;">
-                                🔗 ${startDisplay} → ${endDisplay}
-                            </h4>
-                            <button data-action="remove" data-target="${connectionId}" 
-                                    style="background-color: #dc3545; color: white; border: none; border-radius: 3px; padding: 4px 8px; cursor: pointer; font-size: 0.85em; margin-left: 8px; flex-shrink: 0;">
-                                ✕
-                            </button>
-                        </div>
-                        <div style="font-size: 0.85em;">
-                            ${reasons}
-                        </div>
-                    </div>
-                `;
-                
-                // Get the actual current content from the DOM element instead of div.text
-                // This preserves any deletions made by the close button
+
+                // Short-term memory: keep pinned items in a JS state list and always render via div.text.
+                // This prevents previously removed items from reappearing when pinning new connections.
+                const st = ensurePinnedState();
                 const divElement = document.getElementById(div.id);
-                if (divElement) {
-                    const pinnedItemsDiv = divElement.querySelector('#pinned-items');
-                    if (pinnedItemsDiv) {
-                        ensurePinnedDelegation(divElement);
+                if (divElement) ensurePinnedDelegation(divElement);
 
-                        const existing = divElement.querySelector('#' + CSS.escape(connectionId));
-                        if (existing) {
-                            // Update content and move to top.
-                            existing.querySelector('h4').innerHTML = `🔗 ${startDisplay} → ${endDisplay}`;
-                            const body = existing.querySelector('div[style*="font-size: 0.85em"]');
-                            if (body) body.innerHTML = reasons;
-                            pinnedItemsDiv.insertBefore(existing, pinnedItemsDiv.firstChild);
-                        } else {
-                            // Prepend the new item to the pinned-items div
-                            pinnedItemsDiv.insertAdjacentHTML('afterbegin', newItemHTML);
-                        }
-
-                        syncModelFromDom(divElement);
-                    }
-                } else {
-                    // Fallback to old method if we can't find the element
-                    const currentHTML = div.text;
-                    const pinnedItemsStart = currentHTML.indexOf('<div id=\\'pinned-items\\'');
-                    if (pinnedItemsStart !== -1) {
-                        const pinnedItemsEnd = currentHTML.indexOf('>', pinnedItemsStart) + 1;
-                        const beforePinnedItems = currentHTML.substring(0, pinnedItemsEnd);
-                        const afterPinnedItems = currentHTML.substring(pinnedItemsEnd);
-                        div.text = beforePinnedItems + newItemHTML + afterPinnedItems;
-                    }
-                }
+                const item = { id: connectionId, startDisplay: startDisplay, endDisplay: endDisplay, reasons: reasons };
+                st.items = (st.items || []).filter(it => it && it.id !== connectionId);
+                st.items.unshift(item);
+                window.__kgPinnedState = st;
+                if (window.__kgPinnedRender) window.__kgPinnedRender();
             }
         """)
         

@@ -2,7 +2,7 @@
 
 SearchANDGraph is a Python application that discovers web sources for a query, crawls pages (and optionally documents), extracts entities/relations, and produces a knowledge graph with HTML visualizations.
 
-It can be run as a script (writes artifacts under `scans/`) or as a small FastAPI server that lets you type a query in a browser and view the generated graph.
+This project is moving to a **desktop executable** workflow: run scans from a **PyQt UI** and view the generated HTML graph inside the app.
 
 ## Key Features
 
@@ -37,16 +37,11 @@ python main_refactored.py
 
 Note: `main_refactored.py` currently runs with defaults unless you modify the call to `main(...)` or the defaults in `config.py`.
 
-### 3) Run the web UI (FastAPI)
+### 3) Run the desktop UI (PyQt)
 
 ```bash
-uvicorn api_server:app --host 127.0.0.1 --port 8000
+python desktop_app.py
 ```
-
-Open `http://127.0.0.1:8000/`, enter a query, and the server will:
-
-- Reuse an existing graph under `scans/` if present
-- Otherwise run a background scan and show the HTML when it’s ready
 
 ## Output Artifacts
 
@@ -56,7 +51,7 @@ Each query writes into a stable scan directory under `scans/<sanitized_query>/` 
 - `knowledge_graph.html` (static visualization)
 - `knowledge_graph_interactive.html` (interactive visualization)
 - `cache/` (per-scan cache)
-- `scan.log` and `status.json` (when running via the API server)
+- `downloads/` (downloaded PDFs and other document artifacts)
 
 ## Configuration
 
@@ -88,7 +83,7 @@ GitHub Actions workflow: [.github/workflows/codeql.yml](.github/workflows/codeql
 ## Project Layout (high level)
 
 - `main_refactored.py`: main scan orchestration entry point
-- `api_server.py`: FastAPI server + minimal browser UI for running/serving scans
+- `desktop_app.py`: PyQt desktop UI (runs scans and displays output)
 - `crawler.py`: browser-based crawler + extraction + URL discovery
 - `web_search.py`: search engine scraping + download helpers
 - `document_extractor.py`: PDF/image download + text/table extraction
