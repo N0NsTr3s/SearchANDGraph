@@ -22,7 +22,7 @@ This repository includes a GitHub Actions security pipeline using **CodeQL** for
 
 - CodeQL runs on pushes and pull requests targeting `main` / `master`, plus a weekly scheduled run (Mondays 02:56 UTC) and manual `workflow_dispatch`.
 - Dependency Review runs on pull requests to flag risky dependency changes.
-- A dependency audit (pip-audit) runs on pushes and on the weekly schedule to catch known vulnerable packages.
+- A dependency audit (pip-audit) runs on pushes and on the weekly schedule to catch known vulnerable packages (reported in the workflow summary; it does not fail the job).
 
 Workflow definition: [.github/workflows/codeql.yml](.github/workflows/codeql.yml). Results show up under GitHub **Security → Code scanning alerts** and as checks on pull requests.
 

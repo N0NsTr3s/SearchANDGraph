@@ -16,7 +16,6 @@ jobs:
   dependency-review:
     name: "Dependency Review"
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
     permissions:
       contents: read
       pull-requests: read
@@ -26,6 +25,7 @@ jobs:
 
       - name: "Dependency Review"
         uses: actions/dependency-review-action@v4
+        if: github.event_name == 'pull_request'
 
       - name: "Set up Python"
         uses: actions/setup-python@v5
@@ -88,85 +88,6 @@ jobs:
         run: |
           echo "## Dependency audit (pip-audit)" >> "$GITHUB_STEP_SUMMARY"
           echo "Exit code: ${{ steps.pip_audit_pr.outputs.exit_code }}" >> "$GITHUB_STEP_SUMMARY"
-          if [ -f pip-audit.txt ]; then
-            echo "\n\`\`\`" >> "$GITHUB_STEP_SUMMARY"
-            tail -n 200 pip-audit.txt >> "$GITHUB_STEP_SUMMARY" || true
-            echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "(No pip-audit output captured.)" >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-  dependency-audit:
-    name: "Dependency Audit (push/schedule)"
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    permissions:
-      contents: read
-    steps:
-      - name: "Checkout"
-        uses: actions/checkout@v4
-
-      - name: "Set up Python"
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: "Install pip-audit"
-        run: python -m pip install --upgrade pip pip-audit
-
-      - name: "Prepare requirements for audit"
-        shell: bash
-        run: |
-          # pip-audit cannot always resolve direct URL / local path requirements.
-          # Filter those out for auditing PyPI packages.
-          python - <<'PY'
-          from pathlib import Path
-          src = Path('requirements.txt')
-          dst = Path('.ci-requirements-audit.txt')
-          data = src.read_bytes()
-
-          decoded = None
-          for enc in ('utf-8-sig', 'utf-8', 'utf-16', 'utf-16-le', 'utf-16-be', 'cp1252', 'latin-1'):
-            try:
-              decoded = data.decode(enc)
-              break
-            except UnicodeDecodeError:
-              continue
-          if decoded is None:
-            decoded = data.decode('utf-8', errors='replace')
-
-          lines = decoded.splitlines()
-          out = []
-          for line in lines:
-            s = line.strip()
-            if not s or s.startswith('#'):
-              continue
-            if ' @ ' in s or '://' in s:
-              continue
-            out.append(s)
-          dst.write_text('\n'.join(out) + ('\n' if out else ''), encoding='utf-8')
-          print(f'Wrote {dst} with {len(out)} audited requirement(s)')
-          PY
-
-      - name: "Run dependency audit"
-        id: pip_audit
-        shell: bash
-        run: |
-          set -o pipefail
-          exit_code=0
-          pip-audit -r .ci-requirements-audit.txt | tee pip-audit.txt || exit_code=$?
-          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
-          if [ "$exit_code" -ne 0 ]; then
-            echo "::warning::pip-audit found vulnerabilities (exit $exit_code). See job summary for details."
-          fi
-          exit 0
-
-      - name: "Publish audit summary"
-        if: always()
-        shell: bash
-        run: |
-          echo "## Dependency audit (pip-audit)" >> "$GITHUB_STEP_SUMMARY"
-          echo "Exit code: ${{ steps.pip_audit.outputs.exit_code }}" >> "$GITHUB_STEP_SUMMARY"
           if [ -f pip-audit.txt ]; then
             echo "\n\`\`\`" >> "$GITHUB_STEP_SUMMARY"
             tail -n 200 pip-audit.txt >> "$GITHUB_STEP_SUMMARY" || true
