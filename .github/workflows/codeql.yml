@@ -89,7 +89,8 @@ jobs:
           echo "## Dependency audit (pip-audit)" >> "$GITHUB_STEP_SUMMARY"
           echo "Exit code: ${{ steps.pip_audit_pr.outputs.exit_code }}" >> "$GITHUB_STEP_SUMMARY"
           if [ -f pip-audit.txt ]; then
-            echo "\n\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
             tail -n 200 pip-audit.txt >> "$GITHUB_STEP_SUMMARY" || true
             echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
           else
