@@ -27,6 +27,49 @@ jobs:
       - name: "Dependency Review"
         uses: actions/dependency-review-action@v4
 
+  dependency-audit:
+    name: "Dependency Audit (push/schedule)"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v4
+
+      - name: "Set up Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: "Install pip-audit"
+        run: python -m pip install --upgrade pip pip-audit
+
+      - name: "Prepare requirements for audit"
+        shell: bash
+        run: |
+          # pip-audit cannot always resolve direct URL / local path requirements.
+          # Filter those out for auditing PyPI packages.
+          python - <<'PY'
+          from pathlib import Path
+          src = Path('requirements.txt')
+          dst = Path('.ci-requirements-audit.txt')
+          lines = src.read_text(encoding='utf-8').splitlines()
+          out = []
+          for line in lines:
+            s = line.strip()
+            if not s or s.startswith('#'):
+              continue
+            if ' @ ' in s or '://' in s:
+              continue
+            out.append(s)
+          dst.write_text('\n'.join(out) + ('\n' if out else ''), encoding='utf-8')
+          print(f'Wrote {dst} with {len(out)} audited requirement(s)')
+          PY
+
+      - name: "Run dependency audit"
+        run: pip-audit -r .ci-requirements-audit.txt
+
   analyze:
     name: "Analyze (CodeQL)"
     runs-on: ubuntu-latest
