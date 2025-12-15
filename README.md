@@ -20,7 +20,7 @@ A Python application that crawls web pages, extracts named entities and their re
 
 This repository includes a GitHub Actions security pipeline using **CodeQL** for code scanning and **Dependency Review** for pull requests.
 
-- CodeQL runs on pushes and pull requests targeting `main` / `master`, plus a weekly scheduled run (Mondays 02:50 UTC) and manual `workflow_dispatch`.
+- CodeQL runs on pushes and pull requests targeting `main` / `master`, plus a weekly scheduled run (Mondays 02:56 UTC) and manual `workflow_dispatch`.
 - Dependency Review runs on pull requests to flag risky dependency changes.
 - A dependency audit (pip-audit) runs on pushes and on the weekly schedule to catch known vulnerable packages.
 
