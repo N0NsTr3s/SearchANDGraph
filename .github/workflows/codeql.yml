@@ -6,7 +6,7 @@ on:
   pull_request:
     branches: ["main", "master"]
   schedule:
-    - cron: "50 2 * * 1" # Mondays 02:31 UTC
+    - cron: "56 2 * * 1" # Mondays 02:56 UTC
   workflow_dispatch:
 
 permissions:
@@ -48,9 +48,7 @@ jobs:
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
-          queries:
-            - security-extended
-            - security-and-quality
+          queries: security-extended,security-and-quality
 
       # For Python projects, CodeQL does not require a build step.
       - name: "Perform CodeQL Analysis"
