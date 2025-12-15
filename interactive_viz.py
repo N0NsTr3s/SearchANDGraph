@@ -97,6 +97,23 @@ class InteractiveGraphVisualizer:
         }
         
         return pos
+
+    def _display_name(self, node: Any) -> str:
+        """Return a human-friendly name for a node.
+
+        Graph nodes may use canonical IDs (e.g., Wikidata QIDs) as their keys.
+        Prefer rich metadata (e.g., display_name) for rendering labels.
+        """
+        try:
+            data = self.graph.nodes.get(node, {})  # type: ignore[attr-defined]
+            if isinstance(data, dict):
+                for key in ("display_name", "canonical_label", "label_name", "name", "title"):
+                    value = data.get(key)
+                    if value:
+                        return str(value)
+        except Exception:
+            pass
+        return str(node)
     
     def _get_node_sizes(self) -> Dict[str, float]:
         """
@@ -195,7 +212,9 @@ class InteractiveGraphVisualizer:
             dates = data.get('dates', [])
             confidence = data.get('confidence', None)
             
-            hover_text = f"<b>{source} ↔ {target}</b><br>"
+            source_name = self._display_name(source)
+            target_name = self._display_name(target)
+            hover_text = f"<b>{source_name} ↔ {target_name}</b><br>"
             
             # Add temporal information
             if dates:
@@ -259,13 +278,13 @@ class InteractiveGraphVisualizer:
             x, y = self.pos[node]
             node_x.append(x)
             node_y.append(y)
-            node_labels.append(node)
+            node_labels.append(self._display_name(node))
             
             # Node hover text
             label = self.graph.nodes[node].get('label', 'UNKNOWN')
             degree = self.graph.degree(node) # type: ignore
             
-            hover_text = f"<b>{node}</b><br>"
+            hover_text = f"<b>{self._display_name(node)}</b><br>"
             hover_text += f"Type: {label}<br>"
             hover_text += f"Connections: {degree}<br>"
             
@@ -274,7 +293,7 @@ class InteractiveGraphVisualizer:
             if neighbors:
                 hover_text += f"<br>Connected to:<br>"
                 for i, neighbor in enumerate(neighbors[:5]):
-                    hover_text += f"• {neighbor}<br>"
+                    hover_text += f"• {self._display_name(neighbor)}<br>"
                 if len(neighbors) > 5:
                     hover_text += f"• ... and {len(neighbors) - 5} more"
             

@@ -23,7 +23,7 @@ logs/
 # App-generated data/output
 cache/
 scans/
-
+user_settings.json
 # Local editor / OS
 .vscode/
 .DS_Store

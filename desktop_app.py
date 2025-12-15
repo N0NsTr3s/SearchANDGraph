@@ -10,6 +10,7 @@ Minimal UX:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -17,12 +18,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from config import CrawlerConfig, NLPConfig, VisualizationConfig
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, Qt, QUrl, QTimer, QEvent
 from PyQt6.QtGui import QAction, QDesktopServices
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -129,6 +135,333 @@ class ScanRequest:
     enable_web_search: bool
     download_pdfs: bool
     base_dir: str = "scans"
+    preferred_sources: tuple[str, ...] = ()
+    blacklisted_sources: tuple[str, ...] = ()
+    viz_max_nodes: Optional[int] = None
+    viz_min_edge_confidence: Optional[float] = None
+    viz_remove_isolated_nodes: Optional[bool] = None
+
+    enable_phase2: Optional[bool] = None
+    phase2_max_pages: Optional[int] = None
+    phase2_concurrent_tabs: Optional[int] = None
+
+    document_min_relevance: Optional[float] = None
+    downloads_prune_irrelevant: Optional[bool] = None
+    downloads_prune_mode: Optional[str] = None
+    web_search_max_pdf_downloads: Optional[int] = None
+    web_search_min_relevance: Optional[float] = None
+
+    nlp_min_confidence: Optional[float] = None
+    nlp_min_relation_confidence: Optional[float] = None
+
+
+@dataclass
+class UserSettings:
+    base_dir: str = "scans"
+    preferred_sources: list[str] = None  # type: ignore[assignment]
+    blacklisted_sources: list[str] = None  # type: ignore[assignment]
+    recent_files: list[str] = None  # type: ignore[assignment]
+    viz_max_nodes: Optional[int] = None
+    viz_min_edge_confidence: Optional[float] = None
+    viz_remove_isolated_nodes: Optional[bool] = None
+
+    enable_phase2: Optional[bool] = None
+    phase2_max_pages: Optional[int] = None
+    phase2_concurrent_tabs: Optional[int] = None
+
+    document_min_relevance: Optional[float] = None
+    downloads_prune_irrelevant: Optional[bool] = None
+    downloads_prune_mode: Optional[str] = None
+    web_search_max_pdf_downloads: Optional[int] = None
+    web_search_min_relevance: Optional[float] = None
+
+    nlp_min_confidence: Optional[float] = None
+    nlp_min_relation_confidence: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        if self.preferred_sources is None:
+            self.preferred_sources = []
+        if self.blacklisted_sources is None:
+            self.blacklisted_sources = []
+        if self.recent_files is None:
+            self.recent_files = []
+
+    @staticmethod
+    def from_dict(data: dict) -> "UserSettings":
+        return UserSettings(
+            base_dir=str(data.get("base_dir") or "scans"),
+            preferred_sources=[str(s) for s in (data.get("preferred_sources") or [])],
+            blacklisted_sources=[str(s) for s in (data.get("blacklisted_sources") or [])],
+            recent_files=[str(s) for s in (data.get("recent_files") or [])],
+            viz_max_nodes=data.get("viz_max_nodes"),
+            viz_min_edge_confidence=data.get("viz_min_edge_confidence"),
+            viz_remove_isolated_nodes=data.get("viz_remove_isolated_nodes"),
+            enable_phase2=data.get("enable_phase2"),
+            phase2_max_pages=data.get("phase2_max_pages"),
+            phase2_concurrent_tabs=data.get("phase2_concurrent_tabs"),
+            document_min_relevance=data.get("document_min_relevance"),
+            downloads_prune_irrelevant=data.get("downloads_prune_irrelevant"),
+            downloads_prune_mode=data.get("downloads_prune_mode"),
+            web_search_max_pdf_downloads=data.get("web_search_max_pdf_downloads"),
+            web_search_min_relevance=data.get("web_search_min_relevance"),
+            nlp_min_confidence=data.get("nlp_min_confidence"),
+            nlp_min_relation_confidence=data.get("nlp_min_relation_confidence"),
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "base_dir": self.base_dir,
+            "preferred_sources": list(self.preferred_sources or []),
+            "blacklisted_sources": list(self.blacklisted_sources or []),
+            "recent_files": list(self.recent_files or []),
+            "viz_max_nodes": self.viz_max_nodes,
+            "viz_min_edge_confidence": self.viz_min_edge_confidence,
+            "viz_remove_isolated_nodes": self.viz_remove_isolated_nodes,
+            "enable_phase2": self.enable_phase2,
+            "phase2_max_pages": self.phase2_max_pages,
+            "phase2_concurrent_tabs": self.phase2_concurrent_tabs,
+            "document_min_relevance": self.document_min_relevance,
+            "downloads_prune_irrelevant": self.downloads_prune_irrelevant,
+            "downloads_prune_mode": self.downloads_prune_mode,
+            "web_search_max_pdf_downloads": self.web_search_max_pdf_downloads,
+            "web_search_min_relevance": self.web_search_min_relevance,
+            "nlp_min_confidence": self.nlp_min_confidence,
+            "nlp_min_relation_confidence": self.nlp_min_relation_confidence,
+        }
+
+
+class OptionsDialog(QDialog):
+    def __init__(self, parent: QWidget, settings: UserSettings):
+        super().__init__(parent)
+        self.setWindowTitle("Options")
+        self._settings = settings
+
+        default_viz = VisualizationConfig()
+        default_crawler = CrawlerConfig()
+        default_nlp = NLPConfig()
+
+        form = QFormLayout()
+
+        # Output folder
+        self.base_dir_edit = QLineEdit(settings.base_dir)
+        self.base_dir_edit.setPlaceholderText("default: scans")
+        browse_btn = QPushButton("Browse…")
+        browse_btn.clicked.connect(self._browse_base_dir)
+        base_row = QWidget()
+        base_row_l = QHBoxLayout(base_row)
+        base_row_l.setContentsMargins(0, 0, 0, 0)
+        base_row_l.addWidget(self.base_dir_edit, 1)
+        base_row_l.addWidget(browse_btn)
+        form.addRow("Output folder", base_row)
+
+        # Preferred/blacklisted sources (comma-separated)
+        self.preferred_sources_edit = QLineEdit(", ".join(settings.preferred_sources or [])
+        )
+        self.preferred_sources_edit.setPlaceholderText(
+            f"default: {', '.join(default_crawler.sources or ['wikipedia'])} (comma-separated)"
+        )
+        form.addRow("Preferred sources", self.preferred_sources_edit)
+
+        self.blacklisted_sources_edit = QLineEdit(", ".join(settings.blacklisted_sources or [])
+        )
+        self.blacklisted_sources_edit.setPlaceholderText("default: none (comma-separated)")
+        form.addRow("Blacklisted sources", self.blacklisted_sources_edit)
+
+        # Visualization overrides
+        self.viz_max_nodes_edit = QLineEdit(
+            "" if settings.viz_max_nodes is None else str(settings.viz_max_nodes)
+        )
+        self.viz_max_nodes_edit.setPlaceholderText(
+            f"(empty = default: {default_viz.max_nodes}) range: 1 - 10000"
+        )
+        form.addRow("Max nodes", self.viz_max_nodes_edit)
+
+        self.viz_min_edge_confidence_edit = QLineEdit(
+            "" if settings.viz_min_edge_confidence is None else str(settings.viz_min_edge_confidence)
+        )
+        self.viz_min_edge_confidence_edit.setPlaceholderText(
+            "(empty = default: no filter) range: 0.0 - 1.0"
+        )
+        form.addRow("Min edge confidence", self.viz_min_edge_confidence_edit)
+
+        self.viz_remove_isolated_edit = QCheckBox("Remove isolated nodes")
+        if settings.viz_remove_isolated_nodes is None:
+            self.viz_remove_isolated_edit.setChecked(True)
+        else:
+            self.viz_remove_isolated_edit.setChecked(bool(settings.viz_remove_isolated_nodes))
+        form.addRow("", self.viz_remove_isolated_edit)
+
+        # Phase 2
+        self.enable_phase2_edit = QCheckBox("Enable Phase 2")
+        if settings.enable_phase2 is None:
+            self.enable_phase2_edit.setChecked(True)
+        else:
+            self.enable_phase2_edit.setChecked(bool(settings.enable_phase2))
+        form.addRow("", self.enable_phase2_edit)
+
+        self.phase2_max_pages_edit = QLineEdit(
+            "" if settings.phase2_max_pages is None else str(settings.phase2_max_pages)
+        )
+        self.phase2_max_pages_edit.setPlaceholderText(
+            f"(empty = default: {default_crawler.phase2_max_pages}) range: 0 - 5000"
+        )
+        form.addRow("Phase 2 max pages", self.phase2_max_pages_edit)
+
+        self.phase2_concurrent_tabs_edit = QLineEdit(
+            "" if settings.phase2_concurrent_tabs is None else str(settings.phase2_concurrent_tabs)
+        )
+        self.phase2_concurrent_tabs_edit.setPlaceholderText(
+            "(empty = default: same as Phase 1) range: 1 - 50"
+        )
+        form.addRow("Phase 2 concurrent tabs", self.phase2_concurrent_tabs_edit)
+
+        # Document handling
+        self.document_min_relevance_edit = QLineEdit(
+            "" if settings.document_min_relevance is None else str(settings.document_min_relevance)
+        )
+        self.document_min_relevance_edit.setPlaceholderText(
+            f"(empty = default: {default_crawler.document_min_relevance}) range: 0.0 - 1.0"
+        )
+        form.addRow("Document min relevance", self.document_min_relevance_edit)
+
+        self.downloads_prune_irrelevant_edit = QCheckBox("Prune irrelevant downloads")
+        if settings.downloads_prune_irrelevant is None:
+            self.downloads_prune_irrelevant_edit.setChecked(True)
+        else:
+            self.downloads_prune_irrelevant_edit.setChecked(bool(settings.downloads_prune_irrelevant))
+        form.addRow("", self.downloads_prune_irrelevant_edit)
+
+        self.downloads_prune_mode_edit = QComboBox()
+        self.downloads_prune_mode_edit.addItem("move")
+        self.downloads_prune_mode_edit.addItem("delete")
+        mode = (settings.downloads_prune_mode or "move").strip().lower()
+        self.downloads_prune_mode_edit.setCurrentIndex(1 if mode == "delete" else 0)
+        form.addRow("Prune mode", self.downloads_prune_mode_edit)
+
+        self.web_search_max_pdf_downloads_edit = QLineEdit(
+            "" if settings.web_search_max_pdf_downloads is None else str(settings.web_search_max_pdf_downloads)
+        )
+        self.web_search_max_pdf_downloads_edit.setPlaceholderText(
+            f"(empty = default: {default_crawler.web_search_max_pdf_downloads}) range: 0 - 1000"
+        )
+        form.addRow("Max PDF downloads", self.web_search_max_pdf_downloads_edit)
+
+        self.web_search_min_relevance_edit = QLineEdit(
+            "" if settings.web_search_min_relevance is None else str(settings.web_search_min_relevance)
+        )
+        self.web_search_min_relevance_edit.setPlaceholderText(
+            f"(empty = default: {default_crawler.web_search_min_relevance}) range: 0.0 - 1.0"
+        )
+        form.addRow("Web search min relevance", self.web_search_min_relevance_edit)
+
+        # Confidence thresholds
+        self.nlp_min_confidence_edit = QLineEdit(
+            "" if settings.nlp_min_confidence is None else str(settings.nlp_min_confidence)
+        )
+        self.nlp_min_confidence_edit.setPlaceholderText(
+            f"(empty = default: {default_nlp.min_confidence}) range: 0.0 - 1.0"
+        )
+        form.addRow("NLP min confidence", self.nlp_min_confidence_edit)
+
+        self.nlp_min_relation_confidence_edit = QLineEdit(
+            "" if settings.nlp_min_relation_confidence is None else str(settings.nlp_min_relation_confidence)
+        )
+        self.nlp_min_relation_confidence_edit.setPlaceholderText(
+            f"(empty = default: {default_nlp.min_relation_confidence}) range: 0.0 - 1.0"
+        )
+        form.addRow("Min relation confidence", self.nlp_min_relation_confidence_edit)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        root = QVBoxLayout(self)
+        root.addLayout(form)
+        root.addWidget(buttons)
+
+    def _browse_base_dir(self) -> None:
+        start = self.base_dir_edit.text().strip() or str(Path.cwd())
+        path = QFileDialog.getExistingDirectory(self, "Select output folder", start)
+        if path:
+            self.base_dir_edit.setText(path)
+
+    def result_settings(self) -> UserSettings:
+        base_dir = self.base_dir_edit.text().strip() or "scans"
+
+        def _split_csv(text: str) -> list[str]:
+            parts = [p.strip() for p in (text or "").split(",")]
+            return [p for p in parts if p]
+
+        preferred = _split_csv(self.preferred_sources_edit.text())
+        blacklisted = _split_csv(self.blacklisted_sources_edit.text())
+
+        max_nodes_raw = (self.viz_max_nodes_edit.text() or "").strip()
+        max_nodes: Optional[int]
+        if not max_nodes_raw:
+            max_nodes = None
+        else:
+            max_nodes = int(max_nodes_raw)
+
+        min_edge_raw = (self.viz_min_edge_confidence_edit.text() or "").strip()
+        min_edge: Optional[float]
+        if not min_edge_raw:
+            min_edge = None
+        else:
+            min_edge = float(min_edge_raw)
+
+        remove_isolated = bool(self.viz_remove_isolated_edit.isChecked())
+
+        enable_phase2 = bool(self.enable_phase2_edit.isChecked())
+
+        phase2_max_pages_raw = (self.phase2_max_pages_edit.text() or "").strip()
+        phase2_max_pages: Optional[int]
+        phase2_max_pages = None if not phase2_max_pages_raw else int(phase2_max_pages_raw)
+
+        phase2_tabs_raw = (self.phase2_concurrent_tabs_edit.text() or "").strip()
+        phase2_concurrent_tabs: Optional[int]
+        phase2_concurrent_tabs = None if not phase2_tabs_raw else int(phase2_tabs_raw)
+
+        doc_min_rel_raw = (self.document_min_relevance_edit.text() or "").strip()
+        document_min_relevance: Optional[float]
+        document_min_relevance = None if not doc_min_rel_raw else float(doc_min_rel_raw)
+
+        downloads_prune_irrelevant = bool(self.downloads_prune_irrelevant_edit.isChecked())
+        downloads_prune_mode = str(self.downloads_prune_mode_edit.currentText() or "move").strip().lower()
+
+        max_pdf_raw = (self.web_search_max_pdf_downloads_edit.text() or "").strip()
+        web_search_max_pdf_downloads: Optional[int]
+        web_search_max_pdf_downloads = None if not max_pdf_raw else int(max_pdf_raw)
+
+        web_min_rel_raw = (self.web_search_min_relevance_edit.text() or "").strip()
+        web_search_min_relevance: Optional[float]
+        web_search_min_relevance = None if not web_min_rel_raw else float(web_min_rel_raw)
+
+        nlp_min_conf_raw = (self.nlp_min_confidence_edit.text() or "").strip()
+        nlp_min_confidence: Optional[float]
+        nlp_min_confidence = None if not nlp_min_conf_raw else float(nlp_min_conf_raw)
+
+        nlp_min_rel_conf_raw = (self.nlp_min_relation_confidence_edit.text() or "").strip()
+        nlp_min_relation_confidence: Optional[float]
+        nlp_min_relation_confidence = None if not nlp_min_rel_conf_raw else float(nlp_min_rel_conf_raw)
+
+        return UserSettings(
+            base_dir=base_dir,
+            preferred_sources=preferred,
+            blacklisted_sources=blacklisted,
+            viz_max_nodes=max_nodes,
+            viz_min_edge_confidence=min_edge,
+            viz_remove_isolated_nodes=remove_isolated,
+            enable_phase2=enable_phase2,
+            phase2_max_pages=phase2_max_pages,
+            phase2_concurrent_tabs=phase2_concurrent_tabs,
+            document_min_relevance=document_min_relevance,
+            downloads_prune_irrelevant=downloads_prune_irrelevant,
+            downloads_prune_mode=downloads_prune_mode,
+            web_search_max_pdf_downloads=web_search_max_pdf_downloads,
+            web_search_min_relevance=web_search_min_relevance,
+            nlp_min_confidence=nlp_min_confidence,
+            nlp_min_relation_confidence=nlp_min_relation_confidence,
+        )
 
 
 class QtLogHandler(logging.Handler):
@@ -208,6 +541,21 @@ class ScanWorker(QObject):
                     browser_headless=self._request.headless,
                     enable_web_search=self._request.enable_web_search,
                     web_search_download_pdfs=self._request.download_pdfs,
+                    preferred_sources=list(self._request.preferred_sources),
+                    blacklisted_sources=list(self._request.blacklisted_sources),
+                    viz_max_nodes=self._request.viz_max_nodes,
+                    viz_min_edge_confidence=self._request.viz_min_edge_confidence,
+                    viz_remove_isolated_nodes=self._request.viz_remove_isolated_nodes,
+                    enable_phase2=self._request.enable_phase2,
+                    phase2_max_pages=self._request.phase2_max_pages,
+                    phase2_concurrent_tabs=self._request.phase2_concurrent_tabs,
+                    document_min_relevance=self._request.document_min_relevance,
+                    downloads_prune_irrelevant=self._request.downloads_prune_irrelevant,
+                    downloads_prune_mode=self._request.downloads_prune_mode,
+                    web_search_max_pdf_downloads=self._request.web_search_max_pdf_downloads,
+                    web_search_min_relevance=self._request.web_search_min_relevance,
+                    nlp_min_confidence=self._request.nlp_min_confidence,
+                    nlp_min_relation_confidence=self._request.nlp_min_relation_confidence,
                 )
             )
 
@@ -237,6 +585,7 @@ class MainWindow(QMainWindow):
         self._thread: Optional[QThread] = None
         self._worker: Optional[ScanWorker] = None
         self._last_scan_dir: Optional[Path] = None
+        self._settings = self._load_settings()
         self._fit_timer = QTimer(self)
         self._fit_timer.setSingleShot(True)
         self._fit_timer.timeout.connect(self._auto_fit_current_page)
@@ -264,8 +613,10 @@ class MainWindow(QMainWindow):
         self.start_btn = QPushButton("Start")
         self.start_btn.clicked.connect(self._on_start)
 
-        self.open_graph_btn = QPushButton("Open graph…")
-        self.open_graph_btn.clicked.connect(self._on_open_graph)
+        self.scan_select = QComboBox()
+        self.scan_select.setMinimumWidth(260)
+        self.scan_select.currentIndexChanged.connect(self._on_scan_selected)
+        self._scan_combo_updating = False
 
         self.open_folder_btn = QPushButton("Open output folder")
         self.open_folder_btn.setEnabled(False)
@@ -306,7 +657,8 @@ class MainWindow(QMainWindow):
         controls_layout.addWidget(self.enable_web_search)
         controls_layout.addWidget(self.download_pdfs)
         controls_layout.addWidget(self.start_btn)
-        controls_layout.addWidget(self.open_graph_btn)
+        controls_layout.addWidget(QLabel("Scans:"))
+        controls_layout.addWidget(self.scan_select, 1)
         controls_layout.addWidget(self.open_folder_btn)
 
         self.bottom_split = QSplitter(Qt.Orientation.Horizontal)
@@ -332,9 +684,21 @@ class MainWindow(QMainWindow):
 
         # Menu (minimal)
         file_menu = self.menuBar().addMenu("File")
+
+        options_action = QAction("Options…", self)
+        options_action.triggered.connect(self._open_options)
+        file_menu.addAction(options_action)
+
+        self._recent_menu = file_menu.addMenu("Recent")
+        self._rebuild_recent_menu()
+
+        file_menu.addSeparator()
         quit_action = QAction("Quit", self)
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
+
+        # Populate scan dropdown on startup.
+        self._refresh_scan_dropdown()
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -530,6 +894,22 @@ class MainWindow(QMainWindow):
             headless=bool(self.headless.isChecked()),
             enable_web_search=bool(self.enable_web_search.isChecked()),
             download_pdfs=bool(self.download_pdfs.isChecked()),
+            base_dir=str(self._settings.base_dir or "scans"),
+            preferred_sources=tuple(self._settings.preferred_sources or ()),
+            blacklisted_sources=tuple(self._settings.blacklisted_sources or ()),
+            viz_max_nodes=self._settings.viz_max_nodes,
+            viz_min_edge_confidence=self._settings.viz_min_edge_confidence,
+            viz_remove_isolated_nodes=self._settings.viz_remove_isolated_nodes,
+            enable_phase2=self._settings.enable_phase2,
+            phase2_max_pages=self._settings.phase2_max_pages,
+            phase2_concurrent_tabs=self._settings.phase2_concurrent_tabs,
+            document_min_relevance=self._settings.document_min_relevance,
+            downloads_prune_irrelevant=self._settings.downloads_prune_irrelevant,
+            downloads_prune_mode=self._settings.downloads_prune_mode,
+            web_search_max_pdf_downloads=self._settings.web_search_max_pdf_downloads,
+            web_search_min_relevance=self._settings.web_search_min_relevance,
+            nlp_min_confidence=self._settings.nlp_min_confidence,
+            nlp_min_relation_confidence=self._settings.nlp_min_relation_confidence,
         )
 
         self._set_status("Queued")
@@ -557,6 +937,44 @@ class MainWindow(QMainWindow):
         self._thread = None
         self._worker = None
 
+    def _settings_path(self) -> Path:
+        # Keep it next to the app script for a simple, portable setup.
+        return Path(__file__).resolve().parent / "user_settings.json"
+
+    def _load_settings(self) -> UserSettings:
+        path = self._settings_path()
+        try:
+            if path.exists():
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    return UserSettings.from_dict(data)
+        except Exception:
+            pass
+        return UserSettings()
+
+    def _save_settings(self) -> None:
+        path = self._settings_path()
+        try:
+            path.write_text(json.dumps(self._settings.to_dict(), indent=2), encoding="utf-8")
+        except Exception as e:
+            QMessageBox.warning(self, "Options", f"Failed to save settings: {e}")
+
+    def _open_options(self) -> None:
+        dlg = OptionsDialog(self, self._settings)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        try:
+            updated = dlg.result_settings()
+        except Exception as e:
+            QMessageBox.warning(self, "Options", f"Invalid options: {e}")
+            return
+
+        self._settings = updated
+        self._save_settings()
+        self._refresh_scan_dropdown()
+        self._append_log("Options saved")
+
     def _on_finished(self, scan_dir: str, html_path: str) -> None:
         self._last_scan_dir = Path(scan_dir)
         self.open_folder_btn.setEnabled(True)
@@ -566,11 +984,14 @@ class MainWindow(QMainWindow):
             url = QUrl.fromLocalFile(html_path)
             self.web_view.load(url)
             self._append_log(f"Loaded graph: {html_path}")
+            self._add_recent_file(Path(html_path))
+            self._refresh_scan_dropdown(select_path=Path(html_path))
         else:
             self.web_view.setHtml(
                 "<html><body><h3>Scan finished, but no HTML graph was found.</h3></body></html>"
             )
             self._append_log("No HTML output found.")
+            self._refresh_scan_dropdown()
 
     def _on_failed(self, message: str) -> None:
         QMessageBox.critical(self, "Scan failed", message)
@@ -589,41 +1010,143 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "Open folder failed", str(e))
 
-    def _on_open_graph(self) -> None:
-        start_dir = Path("scans")
-        if self._last_scan_dir and self._last_scan_dir.exists():
-            start_dir = self._last_scan_dir
-        elif start_dir.exists():
-            # Prefer the most recently modified scan directory.
-            try:
-                candidates = [p for p in start_dir.iterdir() if p.is_dir()]
-                if candidates:
-                    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-                    start_dir = candidates[0]
-            except Exception:
-                pass
+    def _scan_html_files(self) -> list[Path]:
+        base = Path(self._settings.base_dir or "scans")
+        if not base.exists() or not base.is_dir():
+            return []
 
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Open graph HTML",
-            str(start_dir),
-            "HTML files (*.html *.htm);;All files (*.*)",
-        )
-        if not file_path:
+        results: list[Path] = []
+        for child in sorted(base.iterdir(), key=lambda p: p.name.lower()):
+            if not child.is_dir():
+                continue
+            if child.name == "_tmp":
+                continue
+            try:
+                htmls = sorted(
+                    [p for p in child.iterdir() if p.is_file() and p.suffix.lower() in {".html", ".htm"}],
+                    key=lambda p: p.name.lower(),
+                )
+                results.extend(htmls)
+            except Exception:
+                continue
+        return results
+
+    def _refresh_scan_dropdown(self, select_path: Path | None = None) -> None:
+        try:
+            self._scan_combo_updating = True
+            self.scan_select.blockSignals(True)
+            self.scan_select.clear()
+            self.scan_select.addItem("Select scan…", None)
+
+            html_files = self._scan_html_files()
+            for p in html_files:
+                label = f"{p.parent.name} / {p.name}"
+                self.scan_select.addItem(label, str(p.resolve()))
+
+            # Preselect if requested (or try to keep current selection).
+            target = None
+            if select_path is not None:
+                try:
+                    target = str(select_path.resolve())
+                except Exception:
+                    target = str(select_path)
+
+            if target:
+                for i in range(self.scan_select.count()):
+                    if self.scan_select.itemData(i) == target:
+                        self.scan_select.setCurrentIndex(i)
+                        break
+        finally:
+            self.scan_select.blockSignals(False)
+            self._scan_combo_updating = False
+
+    def _on_scan_selected(self, _index: int) -> None:
+        if getattr(self, "_scan_combo_updating", False):
             return
 
-        selected = Path(file_path)
+        data = self.scan_select.currentData()
+        if not data:
+            return
+
+        selected = Path(str(data))
         if not selected.exists():
-            QMessageBox.warning(self, "File not found", str(selected))
+            self._append_log(f"Scan HTML missing: {selected}")
             return
 
         self._last_scan_dir = selected.parent
         self.open_folder_btn.setEnabled(True)
-
         self._set_status("Viewing existing graph")
         self._log_html_hints(selected)
         self.web_view.load(QUrl.fromLocalFile(str(selected.resolve())))
-        self._append_log(f"Opened graph: {selected}")
+        self._append_log(f"Loaded graph: {selected}")
+        self._add_recent_file(selected)
+
+    def _rebuild_recent_menu(self) -> None:
+        if not hasattr(self, "_recent_menu") or self._recent_menu is None:
+            return
+
+        self._recent_menu.clear()
+        items = list(self._settings.recent_files or [])
+        # Keep only existing HTML files.
+        pruned: list[str] = []
+        for s in items:
+            try:
+                p = Path(s)
+                if p.exists() and p.is_file() and p.suffix.lower() in {".html", ".htm"}:
+                    pruned.append(str(p))
+            except Exception:
+                continue
+        if pruned != items:
+            self._settings.recent_files = pruned[:10]
+            self._save_settings()
+
+        if not pruned:
+            empty = QAction("(empty)", self)
+            empty.setEnabled(False)
+            self._recent_menu.addAction(empty)
+            return
+
+        for s in pruned[:10]:
+            p = Path(s)
+            label = f"{p.parent.name} / {p.name}"
+            act = QAction(label, self)
+            act.triggered.connect(lambda _=False, path=s: self._open_recent_path(path))
+            self._recent_menu.addAction(act)
+
+    def _add_recent_file(self, path: Path) -> None:
+        try:
+            p = path.resolve()
+        except Exception:
+            p = path
+
+        if p.suffix.lower() not in {".html", ".htm"}:
+            return
+        s = str(p)
+
+        items = list(self._settings.recent_files or [])
+        # De-dupe while keeping newest at front.
+        items = [x for x in items if x != s]
+        items.insert(0, s)
+        self._settings.recent_files = items[:10]
+        self._save_settings()
+        self._rebuild_recent_menu()
+
+    def _open_recent_path(self, path_str: str) -> None:
+        p = Path(path_str)
+        if not p.exists():
+            self._append_log(f"Recent file missing: {p}")
+            # Rebuild to prune missing entries.
+            self._rebuild_recent_menu()
+            return
+
+        self._last_scan_dir = p.parent
+        self.open_folder_btn.setEnabled(True)
+        self._set_status("Viewing existing graph")
+        self._log_html_hints(p)
+        self.web_view.load(QUrl.fromLocalFile(str(p.resolve())))
+        self._append_log(f"Loaded graph: {p}")
+        self._add_recent_file(p)
+        self._refresh_scan_dropdown(select_path=p)
 
     def _log_html_hints(self, html_path: Path) -> None:
         """Add non-blocking hints for common embedded-viewer issues."""

@@ -218,6 +218,21 @@ async def main(
     browser_headless: bool | None = None,
     enable_web_search: bool | None = None,
     web_search_download_pdfs: bool | None = None,
+    preferred_sources: list[str] | None = None,
+    blacklisted_sources: list[str] | None = None,
+    viz_max_nodes: int | None = None,
+    viz_min_edge_confidence: float | None = None,
+    viz_remove_isolated_nodes: bool | None = None,
+    enable_phase2: bool | None = None,
+    phase2_max_pages: int | None = None,
+    phase2_concurrent_tabs: int | None = None,
+    document_min_relevance: float | None = None,
+    downloads_prune_irrelevant: bool | None = None,
+    downloads_prune_mode: str | None = None,
+    web_search_max_pdf_downloads: int | None = None,
+    web_search_min_relevance: float | None = None,
+    nlp_min_confidence: float | None = None,
+    nlp_min_relation_confidence: float | None = None,
 ):
     """Run a full scan and build visualizations.
 
@@ -252,6 +267,64 @@ async def main(
         config.crawler.enable_web_search = enable_web_search
     if web_search_download_pdfs is not None:
         config.crawler.web_search_download_pdfs = web_search_download_pdfs
+
+    # Phase 2 overrides
+    if enable_phase2 is not None:
+        config.crawler.enable_phase2 = enable_phase2
+    if phase2_max_pages is not None:
+        config.crawler.phase2_max_pages = phase2_max_pages
+    if phase2_concurrent_tabs is not None:
+        config.crawler.phase2_concurrent_tabs = phase2_concurrent_tabs
+
+    # Document handling overrides
+    if document_min_relevance is not None:
+        config.crawler.document_min_relevance = document_min_relevance
+    if downloads_prune_irrelevant is not None:
+        config.crawler.downloads_prune_irrelevant = downloads_prune_irrelevant
+    if downloads_prune_mode is not None:
+        mode = str(downloads_prune_mode).strip().lower()
+        if mode in {"move", "delete"}:
+            config.crawler.downloads_prune_mode = mode
+    if web_search_max_pdf_downloads is not None:
+        config.crawler.web_search_max_pdf_downloads = web_search_max_pdf_downloads
+    if web_search_min_relevance is not None:
+        config.crawler.web_search_min_relevance = web_search_min_relevance
+
+    # Optional config overrides driven by the desktop UI
+    if preferred_sources is not None or blacklisted_sources is not None:
+        current_sources = list(getattr(config.crawler, 'sources', []) or [])
+        deny = {s.strip().lower() for s in (blacklisted_sources or []) if s and s.strip()}
+        prefer = [s.strip() for s in (preferred_sources or []) if s and s.strip()]
+
+        # Remove blacklisted
+        filtered = [s for s in current_sources if s.strip().lower() not in deny]
+
+        # Move preferred to front (keep order, avoid duplicates)
+        preferred_ordered = []
+        for s in prefer:
+            if s.strip().lower() in deny:
+                continue
+            if s in preferred_ordered:
+                continue
+            preferred_ordered.append(s)
+
+        remainder = [s for s in filtered if s not in preferred_ordered]
+        merged = preferred_ordered + remainder
+        if merged:
+            config.crawler.sources = merged
+
+    if viz_max_nodes is not None:
+        config.visualization.max_nodes = viz_max_nodes
+    if viz_min_edge_confidence is not None:
+        config.visualization.min_edge_confidence = viz_min_edge_confidence
+    if viz_remove_isolated_nodes is not None:
+        config.visualization.remove_isolated_nodes = viz_remove_isolated_nodes
+
+    # Confidence-related overrides (NLP)
+    if nlp_min_confidence is not None:
+        config.nlp.min_confidence = nlp_min_confidence
+    if nlp_min_relation_confidence is not None:
+        config.nlp.min_relation_confidence = nlp_min_relation_confidence
     
     # IMPORTANT: Get query-specific paths
     # This creates a separate folder for each query to avoid merging different scans
