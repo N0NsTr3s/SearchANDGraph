@@ -700,8 +700,8 @@ class ScanWorker(QObject):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-
-        self.setWindowTitle("SearchANDGraph")
+        from version import CURRENT_VERSION
+        self.setWindowTitle(f"SearchANDGraph - {CURRENT_VERSION}")
         self.resize(1200, 780)
 
         self._thread: Optional[QThread] = None
