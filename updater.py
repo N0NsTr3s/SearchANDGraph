@@ -53,7 +53,8 @@ def check_for_updates(timeout_s: float = 5.0) -> Optional[dict[str, Any]]:
 
 
 def _pick_asset_url(release_data: dict[str, Any]) -> Optional[tuple[str, str]]:
-    """Return (url, kind) where kind is 'exe' or 'zip'. Prefer .exe, then .zip."""
+    """Return (url, kind) where kind is 'exe' or 'zip'. Prefer exact-named Inno installer
+    'SearchANDGraphSetup.exe' (case-insensitive), then any .exe, then archives."""
     assets = release_data.get("assets") or []
     if not isinstance(assets, list):
         return None
@@ -70,9 +71,12 @@ def _pick_asset_url(release_data: dict[str, Any]) -> Optional[tuple[str, str]]:
         url = asset.get("browser_download_url")
         if not url:
             continue
-        if name.endswith(".exe"):
+        # Prefer an exact installer filename first
+        if name == f"{REPO_NAME.lower()}setup.exe":
             exe_url = url
             break
+        if name.endswith(".exe") and not exe_url:
+            exe_url = url
         if any(name.endswith(ext) for ext in archive_exts):
             archive_url = archive_url or url
             # Prefer an exact-named archive SearchANDGraph.zip (case-insensitive)
@@ -125,43 +129,62 @@ def perform_update(
             win_creationflags = 0
 
     if kind == "exe":
-        installer_path = os.path.join(temp_dir, f"{REPO_NAME}_Update.exe")
-        r = requests.get(download_url, headers=headers, stream=True, timeout=30.0)
-        r.raise_for_status()
+        # Download installer to a unique temp file
+        try:
+            r = requests.get(download_url, headers=headers, stream=True, timeout=30.0)
+            r.raise_for_status()
+        except Exception as e:
+            raise RuntimeError(f"Failed to download installer: {e}")
 
         total = int(r.headers.get("content-length") or 0)
         written = 0
         if progress_callback:
             progress_callback(0, "Downloading installer...")
-        with open(installer_path, "wb") as f:
-            for chunk in r.iter_content(chunk_size=1024 * 1024):
-                if chunk:
-                    f.write(chunk)
-                    written += len(chunk)
-                    if total and progress_callback:
-                        pct = int(written * 100 / total)
-                        progress_callback(min(pct, 99), "Downloading installer...")
 
-        args = [installer_path]
-        if silent:
-            args += ["/SILENT", "/NORESTART"]
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".exe", prefix=f"{REPO_NAME}_Setup_", dir=temp_dir) as tf:
+            installer_path = tf.name
+            for chunk in r.iter_content(chunk_size=8192):
+                if not chunk:
+                    continue
+                tf.write(chunk)
+                written += len(chunk)
+                if total and progress_callback:
+                    pct = int(written * 100 / total)
+                    try:
+                        progress_callback(min(pct, 99), "Downloading installer")
+                    except Exception:
+                        pass
 
-        subprocess.Popen(args, close_fds=True, startupinfo=win_startupinfo, creationflags=win_creationflags)
+        # Make sure file is writable
+        try:
+            os.chmod(installer_path, 0o755)
+        except Exception:
+            pass
+
+        # Use PowerShell to launch installer elevated so UAC is shown reliably
+        # Use Inno Setup flags: /VERYSILENT /NORESTART
+        ps_command = f'Start-Process -FilePath "{installer_path}" -ArgumentList "/VERYSILENT","/NORESTART" -Verb RunAs'
+        try:
+            subprocess.Popen(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_command],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                startupinfo=win_startupinfo,
+                creationflags=win_creationflags,
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to launch installer: {e}")
+
         if progress_callback:
-            progress_callback(100, "Installer launched")
-        if exit_after_launch:
-            # Ensure the whole process exits (not just the worker thread)
             try:
-                import threading
-
-                if threading.current_thread() is threading.main_thread():
-                    raise SystemExit(0)
-            except SystemExit:
-                raise
+                progress_callback(100, "Installer launched")
             except Exception:
                 pass
-            os._exit(0)
-        return {"action": "installer", "path": installer_path}
+
+        result = {"action": "installer", "path": installer_path, "elevated": True}
+        if exit_after_launch:
+            result["exit_after_launch"] = True
+        return result
 
     # kind == "zip" (archive)
     archive_path = os.path.join(temp_dir, f"{REPO_NAME}_Update.zip")
