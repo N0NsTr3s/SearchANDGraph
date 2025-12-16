@@ -30,18 +30,21 @@ def check_for_updates(timeout_s: float = 5.0) -> Optional[dict[str, Any]]:
 
     try:
         url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest"
-        headers = {"User-Agent": f"{REPO_NAME}-updater"}
+        headers = {"User-Agent": f"{REPO_NAME}"}
         response = requests.get(url, headers=headers, timeout=timeout_s)
         if response.status_code != 200:
+            print(f"Update check failed: HTTP {response.status_code}")
             return None
 
         data = response.json()
         latest_tag = str(data.get("tag_name") or "").strip()
         if not latest_tag:
+            print("Update check failed: no tag_name in response")
             return None
 
         latest_clean = latest_tag.lstrip("v").strip()
         if pkg_version.parse(latest_clean) > pkg_version.parse(CURRENT_VERSION):
+            print(f"Update available: {CURRENT_VERSION} -> {latest_clean}")
             return data
     except Exception:
         return None
@@ -104,7 +107,7 @@ def perform_update(
     download_url, kind = picked
     temp_dir = tempfile.gettempdir()
 
-    headers = {"User-Agent": f"{REPO_NAME}-updater"}
+    headers = {"User-Agent": f"{REPO_NAME}"}
 
     # Prepare Windows-specific startup flags to avoid showing a console window
     win_startupinfo = None

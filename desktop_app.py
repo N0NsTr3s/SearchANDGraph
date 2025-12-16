@@ -73,6 +73,7 @@ def _prompt_update_and_install(release_data: dict) -> None:
         resp = mbox(0, "A new update is available. Download and install now?", "Update Found", 0x04)
         if int(resp) == 6:
             perform_update(release_data, silent=True)
+            sys.exit(0)
     except Exception:
         # If anything goes wrong (no UI, etc.), skip updates quietly.
         return
@@ -153,6 +154,7 @@ class UpdateDialog(QDialog):
             self._thread.wait(2000)
         except Exception:
             pass
+        QApplication.quit()
 
     def _on_error(self, err: str) -> None:
         self._label.setText(f"Update failed: {err}")
@@ -1306,10 +1308,12 @@ def main() -> None:
                     if resp == QMessageBox.StandardButton.Yes:
                         dlg = UpdateDialog(None, release)
                         dlg.exec()
+                        sys.exit(0)
                 except Exception:
                     # Fallback: directly show UpdateDialog
                     dlg = UpdateDialog(None, release)
                     dlg.exec()
+                    sys.exit(0)
         except Exception:
             pass
 
