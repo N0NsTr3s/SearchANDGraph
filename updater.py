@@ -208,7 +208,16 @@ def perform_update(
     # Prepare PowerShell apply script and make updater wait for the app to exit
     current_pid = os.getpid()
     ps_script = os.path.join(temp_dir, f"{REPO_NAME}_apply_update.ps1")
-    src = extract_dir.replace('"', '""')
+    # If the extracted archive contains a single top-level folder, use it as the source
+    try:
+        entries = [e for e in os.listdir(extract_dir) if not e.startswith('.')]
+        if len(entries) == 1 and os.path.isdir(os.path.join(extract_dir, entries[0])):
+            actual_src = os.path.join(extract_dir, entries[0])
+        else:
+            actual_src = extract_dir
+    except Exception:
+        actual_src = extract_dir
+    src = actual_src.replace('"', '""')
     dest = app_dir.replace('"', '""')
     exe_name = os.path.basename(sys.executable) if getattr(sys, "frozen", False) else "SearchANDGraph.exe"
     log_path = os.path.join(temp_dir, f"{REPO_NAME}_update_log.txt").replace('"', '""')
