@@ -51,8 +51,21 @@ from updater import check_for_updates, perform_update
 
 def _prompt_update_and_install(release_data: dict) -> None:
     """Ask the user via a native Windows dialog, then run installer if accepted."""
-
     try:
+        # Prefer Qt dialog when running inside the GUI
+        if QApplication.instance() is not None:
+            resp = QMessageBox.question(
+                None,
+                "Update Found",
+                "A new update is available. Download and install now?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if resp == QMessageBox.StandardButton.Yes:
+                dlg = UpdateDialog(None, release_data)
+                dlg.exec()
+            return
+
+        # Fallback to native Win32 dialog if Qt isn't available
         import ctypes
 
         # MB_YESNO = 0x04, IDYES = 6
@@ -1283,8 +1296,20 @@ def main() -> None:
         try:
             release = check_for_updates(timeout_s=4.0)
             if release:
-                dlg = UpdateDialog(None, release)
-                dlg.exec()
+                try:
+                    resp = QMessageBox.question(
+                        None,
+                        "Update Found",
+                        "A new update is available. Download and install now?",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    )
+                    if resp == QMessageBox.StandardButton.Yes:
+                        dlg = UpdateDialog(None, release)
+                        dlg.exec()
+                except Exception:
+                    # Fallback: directly show UpdateDialog
+                    dlg = UpdateDialog(None, release)
+                    dlg.exec()
         except Exception:
             pass
 

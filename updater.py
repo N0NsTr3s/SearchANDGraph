@@ -57,6 +57,7 @@ def _pick_asset_url(release_data: dict[str, Any]) -> Optional[tuple[str, str]]:
 
     exe_url = None
     archive_url = None
+    exact_archive_url = None
     archive_exts = (".zip", ".tar.gz", ".tgz", ".tar")
 
     for asset in assets:
@@ -70,10 +71,15 @@ def _pick_asset_url(release_data: dict[str, Any]) -> Optional[tuple[str, str]]:
             exe_url = url
             break
         if any(name.endswith(ext) for ext in archive_exts):
-            archive_url = url
+            archive_url = archive_url or url
+            # Prefer an exact-named archive SearchANDGraph.zip (case-insensitive)
+            if name == f"{REPO_NAME.lower()}.zip":
+                exact_archive_url = url
 
     if exe_url:
         return exe_url, "exe"
+    if exact_archive_url:
+        return exact_archive_url, "zip"
     if archive_url:
         return archive_url, "zip"
     return None
@@ -100,6 +106,21 @@ def perform_update(
 
     headers = {"User-Agent": f"{REPO_NAME}-updater"}
 
+    # Prepare Windows-specific startup flags to avoid showing a console window
+    win_startupinfo = None
+    win_creationflags = 0
+    if os.name == "nt":
+        try:
+            si = subprocess.STARTUPINFO()
+            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            # 0 == SW_HIDE
+            si.wShowWindow = 0
+            win_startupinfo = si
+            win_creationflags = subprocess.CREATE_NO_WINDOW
+        except Exception:
+            win_startupinfo = None
+            win_creationflags = 0
+
     if kind == "exe":
         installer_path = os.path.join(temp_dir, f"{REPO_NAME}_Update.exe")
         r = requests.get(download_url, headers=headers, stream=True, timeout=30.0)
@@ -122,7 +143,7 @@ def perform_update(
         if silent:
             args += ["/SILENT", "/NORESTART"]
 
-        subprocess.Popen(args, close_fds=True)
+        subprocess.Popen(args, close_fds=True, startupinfo=win_startupinfo, creationflags=win_creationflags)
         if progress_callback:
             progress_callback(100, "Installer launched")
         return {"action": "installer", "path": installer_path}
@@ -193,8 +214,9 @@ Remove-Item -LiteralPath "{archive_path}" -Force -ErrorAction SilentlyContinue
     if progress_callback:
         progress_callback(95, "Applying update...")
 
-    # Launch PowerShell script and return so the caller can exit if desired
-    subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps_script], close_fds=True)
+    # Launch PowerShell script (hidden on Windows) and return so the caller can exit
+    ps_args = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", ps_script]
+    subprocess.Popen(ps_args, close_fds=True, startupinfo=win_startupinfo, creationflags=win_creationflags)
     if progress_callback:
         progress_callback(100, "Update applied (background)")
     return {"action": "script", "script": ps_script}
