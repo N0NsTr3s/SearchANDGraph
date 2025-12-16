@@ -181,10 +181,19 @@ def perform_update(
             except Exception:
                 pass
 
-        result = {"action": "installer", "path": installer_path, "elevated": True}
-        if exit_after_launch:
-            result["exit_after_launch"] = True
-        return result
+        # Close the application so the installer can update files cleanly.
+        # Try graceful exit first, otherwise forcefully terminate.
+        try:
+            import threading
+
+            if threading.current_thread() is threading.main_thread():
+                raise SystemExit(0)
+        except SystemExit:
+            raise
+        except Exception:
+            pass
+        # Fallback: immediate termination
+        os._exit(0)
 
     # kind == "zip" (archive)
     archive_path = os.path.join(temp_dir, f"{REPO_NAME}_Update.zip")
