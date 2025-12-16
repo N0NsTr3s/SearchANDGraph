@@ -202,6 +202,11 @@ def perform_update(
     log_path = os.path.join(temp_dir, f"{REPO_NAME}_update_log.txt").replace('"', '""')
     status_path = os.path.join(temp_dir, f"{REPO_NAME}_update_status.json").replace('"', '""')
 
+    archive_name = os.path.basename(archive_path).replace('"', '""')
+    ps_name = os.path.basename(ps_script).replace('"', '""')
+    status_name = os.path.basename(status_path).replace('"', '""')
+    log_name = os.path.basename(log_path).replace('"', '""')
+
     ps_contents = f'''$processId = {current_pid}
 $src = "{src}"
 $dest = "{dest}"
@@ -213,7 +218,8 @@ while (Get-Process -Id $processId -ErrorAction SilentlyContinue) {{
 }}
 
 # Perform the update and capture robocopy output
-$robocopyCmd = "robocopy `"$src`" `"$dest`" /MIR /COPYALL /R:2 /W:2 /NFL /NDL /NP"
+# Use /COPY:DAT to avoid requiring auditing/owner rights and exclude updater artifacts
+$robocopyCmd = "robocopy `"$src`" `"$dest`" /MIR /COPY:DAT /R:2 /W:2 /NFL /NDL /NP /XF `"{archive_name}`" `"{ps_name}`" `"{status_name}`" `"{log_name}`""
 
 # Run robocopy and capture output
 $out = Invoke-Expression $robocopyCmd 2>&1 | Out-String
