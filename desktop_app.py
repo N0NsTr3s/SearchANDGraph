@@ -40,6 +40,7 @@ from PyQt6.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QWidget,
+    QProgressBar,
 )
 from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PyQt6.QtWebEngineWidgets import QWebEngineView
@@ -62,6 +63,95 @@ def _prompt_update_and_install(release_data: dict) -> None:
     except Exception:
         # If anything goes wrong (no UI, etc.), skip updates quietly.
         return
+
+
+class UpdateWorker(QObject):
+    progress = pyqtSignal(int, str)
+    finished = pyqtSignal(dict)
+    error = pyqtSignal(str)
+
+    def __init__(self, release_data: dict):
+        super().__init__()
+        self._release = release_data
+
+    def run(self) -> None:
+        try:
+            # Import here to avoid circular imports at module import time
+            from updater import perform_update
+
+            def cb(pct: int, msg: str) -> None:
+                try:
+                    self.progress.emit(int(pct), str(msg))
+                except Exception:
+                    pass
+
+            result = perform_update(self._release, silent=True, progress_callback=cb)
+            self.finished.emit(result or {})
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class UpdateDialog(QDialog):
+    def __init__(self, parent: Optional[QWidget], release_data: dict):
+        super().__init__(parent)
+        self.setWindowTitle("Updating...")
+        self.setModal(True)
+
+        self._label = QLabel("Preparing update...")
+        self._bar = QProgressBar()
+        self._bar.setRange(0, 100)
+        self._bar.setValue(0)
+
+        self._close_btn = QPushButton("Close")
+        self._close_btn.setEnabled(False)
+        self._close_btn.clicked.connect(self._on_close)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self._label)
+        layout.addWidget(self._bar)
+        layout.addWidget(self._close_btn)
+
+        # Worker/thread setup
+        self._thread = QThread()
+        self._worker = UpdateWorker(release_data)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.progress.connect(self._on_progress)
+        self._worker.finished.connect(self._on_finished)
+        self._worker.error.connect(self._on_error)
+
+        # Start
+        self._thread.start()
+
+    def _on_progress(self, pct: int, msg: str) -> None:
+        try:
+            self._bar.setValue(int(pct))
+            self._label.setText(str(msg))
+        except Exception:
+            pass
+
+    def _on_finished(self, result: dict) -> None:
+        self._label.setText("Update started in background.")
+        self._bar.setValue(100)
+        self._close_btn.setEnabled(True)
+        # Clean up thread
+        try:
+            self._thread.quit()
+            self._thread.wait(2000)
+        except Exception:
+            pass
+
+    def _on_error(self, err: str) -> None:
+        self._label.setText(f"Update failed: {err}")
+        self._close_btn.setEnabled(True)
+        try:
+            self._thread.quit()
+            self._thread.wait(2000)
+        except Exception:
+            pass
+
+    def _on_close(self) -> None:
+        self.accept()
 
 
 class ExternalLinksPage(QWebEnginePage):
@@ -1186,13 +1276,18 @@ def main() -> None:
     # can detect/rendezvous with a running app during updates.
     _mutex_handle = hold_app_mutex()
 
-    # Optional escape hatch for development.
-    if not os.environ.get("SAG_DISABLE_UPDATES"):
-        release = check_for_updates(timeout_s=4.0)
-        if release:
-            _prompt_update_and_install(release)
-
     app = QApplication(sys.argv)
+
+    # Optional escape hatch for development: run update check after QApplication exists
+    if not os.environ.get("SAG_DISABLE_UPDATES"):
+        try:
+            release = check_for_updates(timeout_s=4.0)
+            if release:
+                dlg = UpdateDialog(None, release)
+                dlg.exec()
+        except Exception:
+            pass
+
     window = MainWindow()
     window.show()
     sys.exit(app.exec())

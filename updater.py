@@ -17,7 +17,7 @@ import sys
 import tempfile
 import shutil
 import zipfile
-from typing import Any, Optional
+from typing import Any, Optional, Callable
 
 import requests
 from packaging import version as pkg_version
@@ -79,11 +79,16 @@ def _pick_asset_url(release_data: dict[str, Any]) -> Optional[tuple[str, str]]:
     return None
 
 
-def perform_update(release_data: dict[str, Any], *, silent: bool = True) -> None:
+def perform_update(
+    release_data: dict[str, Any], *, silent: bool = True, progress_callback: Optional[Callable[[int, str], None]] = None
+) -> dict[str, Any]:
     """Download asset, handle .exe installer or archive containing onedir files.
 
     For archives: extract to temp and launch a PowerShell script that copies files
     into the install dir (uses robocopy) after the app exits.
+
+    When provided, `progress_callback` is called as `progress_callback(percent, message)`.
+    The function returns a dict describing the action taken instead of exiting the process.
     """
 
     picked = _pick_asset_url(release_data)
@@ -99,26 +104,46 @@ def perform_update(release_data: dict[str, Any], *, silent: bool = True) -> None
         installer_path = os.path.join(temp_dir, f"{REPO_NAME}_Update.exe")
         r = requests.get(download_url, headers=headers, stream=True, timeout=30.0)
         r.raise_for_status()
+
+        total = int(r.headers.get("content-length") or 0)
+        written = 0
+        if progress_callback:
+            progress_callback(0, "Downloading installer...")
         with open(installer_path, "wb") as f:
             for chunk in r.iter_content(chunk_size=1024 * 1024):
                 if chunk:
                     f.write(chunk)
+                    written += len(chunk)
+                    if total and progress_callback:
+                        pct = int(written * 100 / total)
+                        progress_callback(min(pct, 99), "Downloading installer...")
 
         args = [installer_path]
         if silent:
             args += ["/SILENT", "/NORESTART"]
 
         subprocess.Popen(args, close_fds=True)
-        sys.exit(0)
+        if progress_callback:
+            progress_callback(100, "Installer launched")
+        return {"action": "installer", "path": installer_path}
 
     # kind == "zip" (archive)
     archive_path = os.path.join(temp_dir, f"{REPO_NAME}_Update.zip")
     r = requests.get(download_url, headers=headers, stream=True, timeout=30.0)
     r.raise_for_status()
+
+    total = int(r.headers.get("content-length") or 0)
+    written = 0
+    if progress_callback:
+        progress_callback(0, "Downloading update archive...")
     with open(archive_path, "wb") as f:
         for chunk in r.iter_content(chunk_size=1024 * 1024):
             if chunk:
                 f.write(chunk)
+                written += len(chunk)
+                if total and progress_callback:
+                    pct = int(written * 100 / total)
+                    progress_callback(min(pct, 80), "Downloading update archive...")
 
     extract_dir = os.path.join(temp_dir, f"{REPO_NAME}_Update_Extract")
     if os.path.exists(extract_dir):
@@ -139,6 +164,9 @@ def perform_update(release_data: dict[str, Any], *, silent: bool = True) -> None
     else:
         # In development, assume current working dir is project root; prefer installation dir if known
         app_dir = os.path.abspath(os.getcwd())
+
+    if progress_callback:
+        progress_callback(85, "Preparing update script...")
 
     # Create PowerShell script to robocopy extracted files into app_dir
     ps_script = os.path.join(temp_dir, f"{REPO_NAME}_apply_update.ps1")
@@ -162,6 +190,11 @@ Remove-Item -LiteralPath "{archive_path}" -Force -ErrorAction SilentlyContinue
     with open(ps_script, "w", encoding="utf-8") as f:
         f.write(ps_contents)
 
-    # Launch PowerShell script and exit so it can copy files
+    if progress_callback:
+        progress_callback(95, "Applying update...")
+
+    # Launch PowerShell script and return so the caller can exit if desired
     subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps_script], close_fds=True)
-    sys.exit(0)
+    if progress_callback:
+        progress_callback(100, "Update applied (background)")
+    return {"action": "script", "script": ps_script}
