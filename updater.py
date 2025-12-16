@@ -89,7 +89,7 @@ def _pick_asset_url(release_data: dict[str, Any]) -> Optional[tuple[str, str]]:
 
 
 def perform_update(
-    release_data: dict[str, Any], *, silent: bool = True, progress_callback: Optional[Callable[[int, str], None]] = None
+    release_data: dict[str, Any], *, silent: bool = True, progress_callback: Optional[Callable[[int, str], None]] = None, exit_after_launch: bool = False
 ) -> dict[str, Any]:
     """Download asset, handle .exe installer or archive containing onedir files.
 
@@ -149,6 +149,18 @@ def perform_update(
         subprocess.Popen(args, close_fds=True, startupinfo=win_startupinfo, creationflags=win_creationflags)
         if progress_callback:
             progress_callback(100, "Installer launched")
+        if exit_after_launch:
+            # Ensure the whole process exits (not just the worker thread)
+            try:
+                import threading
+
+                if threading.current_thread() is threading.main_thread():
+                    raise SystemExit(0)
+            except SystemExit:
+                raise
+            except Exception:
+                pass
+            os._exit(0)
         return {"action": "installer", "path": installer_path}
 
     # kind == "zip" (archive)
@@ -202,40 +214,31 @@ def perform_update(
     log_path = os.path.join(temp_dir, f"{REPO_NAME}_update_log.txt").replace('"', '""')
     status_path = os.path.join(temp_dir, f"{REPO_NAME}_update_status.json").replace('"', '""')
 
-    archive_name = os.path.basename(archive_path).replace('"', '""')
-    ps_name = os.path.basename(ps_script).replace('"', '""')
-    status_name = os.path.basename(status_path).replace('"', '""')
-    log_name = os.path.basename(log_path).replace('"', '""')
+    # Use a robust rename-first PowerShell flow to avoid overwriting locked files
+    ps_contents = f'''$appDir = "{dest}"
+$oldDir = "$appDir`_old"
+$tempSrc = "{src}"
 
-    ps_contents = f'''$processId = {current_pid}
-$src = "{src}"
-$dest = "{dest}"
-$log = "{log_path}"
+# 1. Force kill any zombie browser/drivers that commonly hold locks
+Get-Process chrome, msedge, chromedriver, msedgedriver -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
-# Wait until the original process exits (avoid locked exe/files)
-while (Get-Process -Id $processId -ErrorAction SilentlyContinue) {{
-    Start-Sleep -Milliseconds 200
+# 2. Wait for main EXE to release (try for ~5 seconds)
+$waitCount = 0
+while ((Test-Path "$appDir\\{exe_name}") -and $waitCount -lt 10) {{
+    try {{ [IO.File]::OpenWrite("$appDir\\{exe_name}").Close(); break }}
+    catch {{ Start-Sleep -Milliseconds 500; $waitCount++ }}
 }}
 
-# Perform the update and capture robocopy output
-# Use /COPY:DAT to avoid requiring auditing/owner rights and exclude updater artifacts
-$robocopyCmd = "robocopy `"$src`" `"$dest`" /MIR /COPY:DAT /R:2 /W:2 /NFL /NDL /NP /XF `"{archive_name}`" `"{ps_name}`" `"{status_name}`" `"{log_name}`""
+# 3. Move the current installation to a temporary 'old' name (unplugs running app)
+if (Test-Path $oldDir) {{ Remove-Item $oldDir -Recurse -Force -ErrorAction SilentlyContinue }}
+Rename-Item -Path $appDir -NewName (Split-Path $oldDir -Leaf)
 
-# Run robocopy and capture output
-$out = Invoke-Expression $robocopyCmd 2>&1 | Out-String
-$out | Out-File -FilePath $log -Encoding UTF8
+# 4. Copy the NEW files to the original path (preserve user data folder 'scans')
+robocopy "$tempSrc" "$appDir" /MIR /R:2 /W:2 /XD "scans"
 
-# Write exit code and timestamp to status file so external monitors can react
-$exit = $LASTEXITCODE
-@{{ exit = $exit; timestamp = (Get-Date).ToString('o') }} | ConvertTo-Json | Out-File -FilePath "{status_path}" -Encoding UTF8
-
-# Relaunch the app if present
-$exe = Join-Path $dest "{exe_name}"
-if (Test-Path $exe) {{ Start-Process -FilePath $exe }}
-
-# Cleanup (best-effort)
-Try {{ Remove-Item -LiteralPath "{extract_dir}" -Recurse -Force -ErrorAction SilentlyContinue }} Catch {{}}
-Try {{ Remove-Item -LiteralPath "{archive_path}" -Force -ErrorAction SilentlyContinue }} Catch {{}}
+# 5. Relaunch and cleanup
+Start-Process "$appDir\\{exe_name}"
+Remove-Item $oldDir -Recurse -Force -ErrorAction SilentlyContinue
 '''
 
     with open(ps_script, "w", encoding="utf-8") as f:
@@ -263,10 +266,16 @@ Try {{ Remove-Item -LiteralPath "{archive_path}" -Force -ErrorAction SilentlyCon
             elevate_cmd = [
                 "powershell",
                 "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
                 "-Command",
-                f"Start-Process -FilePath powershell -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File \"{ps_script}\"' -Verb RunAs"
+                (
+                    "Start-Process -Verb RunAs -FilePath 'powershell' "
+                    f"-ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File','{ps_script}')"
+                ),
             ]
-            subprocess.Popen(elevate_cmd, close_fds=True, startupinfo=win_startupinfo, creationflags=win_creationflags)
+            # Don't hide this bootstrapper too aggressively; UAC prompt must appear reliably.
+            subprocess.Popen(elevate_cmd, close_fds=True)
         else:
             ps_args = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", ps_script]
             subprocess.Popen(ps_args, close_fds=True, startupinfo=win_startupinfo, creationflags=win_creationflags)
@@ -323,4 +332,17 @@ while True:
 
     if progress_callback:
         progress_callback(100, "Update applied (background)")
-    return {"action": "script", "script": ps_script, "elevated": need_elevation, "log": log_path, "status": status_path}
+    result = {"action": "script", "script": ps_script, "elevated": need_elevation, "log": log_path, "status": status_path}
+    if exit_after_launch:
+        # Ensure the whole process exits (not just the worker thread)
+        try:
+            import threading
+
+            if threading.current_thread() is threading.main_thread():
+                raise SystemExit(0)
+        except SystemExit:
+            raise
+        except Exception:
+            pass
+        os._exit(0)
+    return result

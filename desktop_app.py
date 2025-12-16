@@ -99,7 +99,8 @@ class UpdateWorker(QObject):
                 except Exception:
                     pass
 
-            result = perform_update(self._release, silent=True, progress_callback=cb)
+            # Exit the app immediately after launching the updater so the PowerShell wait loop can proceed.
+            result = perform_update(self._release, silent=True, progress_callback=cb, exit_after_launch=True)
             self.finished.emit(result or {})
         except Exception as e:
             self.error.emit(str(e))
@@ -231,7 +232,8 @@ class UpdateDialog(QDialog):
                     exitcode = -1
 
                 log = self._result.get("log")
-                if exitcode == 0:
+                # Robocopy exit codes: 0-7 are success, >=8 indicate failure.
+                if 0 <= exitcode < 8:
                     self._label.setText("Update applied successfully.")
                 else:
                     self._label.setText(f"Update failed (exit {exitcode}). Click 'View Update Log' to inspect.")
