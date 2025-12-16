@@ -20,6 +20,7 @@ SearchANDGraph.spec
 pyvenv.cfg
 installer.iss
 Output/
+SearchANDGraph/
 # Logs / runtime artifacts
 logs/
 *.log
