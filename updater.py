@@ -193,22 +193,43 @@ def perform_update(
         progress_callback(85, "Preparing update script...")
 
     # Create PowerShell script to robocopy extracted files into app_dir
+    # Prepare PowerShell apply script and make updater wait for the app to exit
+    current_pid = os.getpid()
     ps_script = os.path.join(temp_dir, f"{REPO_NAME}_apply_update.ps1")
     src = extract_dir.replace('"', '""')
     dest = app_dir.replace('"', '""')
     exe_name = os.path.basename(sys.executable) if getattr(sys, "frozen", False) else "SearchANDGraph.exe"
+    log_path = os.path.join(temp_dir, f"{REPO_NAME}_update_log.txt").replace('"', '""')
+    status_path = os.path.join(temp_dir, f"{REPO_NAME}_update_status.json").replace('"', '""')
 
-    ps_contents = f'''$src = "{src}"
+    ps_contents = f'''$processId = {current_pid}
+$src = "{src}"
 $dest = "{dest}"
-Start-Sleep -s 1
-# Mirror files from extracted dir into install dir
-robocopy $src $dest /MIR /COPYALL /R:2 /W:2
-# If an exe exists in dest, start it
+$log = "{log_path}"
+
+# Wait until the original process exits (avoid locked exe/files)
+while (Get-Process -Id $processId -ErrorAction SilentlyContinue) {{
+    Start-Sleep -Milliseconds 200
+}}
+
+# Perform the update and capture robocopy output
+$robocopyCmd = "robocopy `"$src`" `"$dest`" /MIR /COPYALL /R:2 /W:2 /NFL /NDL /NP"
+
+# Run robocopy and capture output
+$out = Invoke-Expression $robocopyCmd 2>&1 | Out-String
+$out | Out-File -FilePath $log -Encoding UTF8
+
+# Write exit code and timestamp to status file so external monitors can react
+$exit = $LASTEXITCODE
+@{{ exit = $exit; timestamp = (Get-Date).ToString('o') }} | ConvertTo-Json | Out-File -FilePath "{status_path}" -Encoding UTF8
+
+# Relaunch the app if present
 $exe = Join-Path $dest "{exe_name}"
 if (Test-Path $exe) {{ Start-Process -FilePath $exe }}
+
 # Cleanup (best-effort)
-Remove-Item -LiteralPath "{extract_dir}" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath "{archive_path}" -Force -ErrorAction SilentlyContinue
+Try {{ Remove-Item -LiteralPath "{extract_dir}" -Recurse -Force -ErrorAction SilentlyContinue }} Catch {{}}
+Try {{ Remove-Item -LiteralPath "{archive_path}" -Force -ErrorAction SilentlyContinue }} Catch {{}}
 '''
 
     with open(ps_script, "w", encoding="utf-8") as f:
@@ -217,9 +238,83 @@ Remove-Item -LiteralPath "{archive_path}" -Force -ErrorAction SilentlyContinue
     if progress_callback:
         progress_callback(95, "Applying update...")
 
-    # Launch PowerShell script (hidden on Windows) and return so the caller can exit
-    ps_args = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", ps_script]
-    subprocess.Popen(ps_args, close_fds=True, startupinfo=win_startupinfo, creationflags=win_creationflags)
+    # Detect whether the destination is writable; if not, we'll request elevation
+    need_elevation = False
+    try:
+        test_path = os.path.join(app_dir, f".{REPO_NAME}_write_test")
+        with open(test_path, "w") as tf:
+            tf.write("test")
+        os.remove(test_path)
+    except Exception:
+        need_elevation = True
+
+    # Launch PowerShell script. If elevation is required, use Start-Process -Verb RunAs
+    if os.name == "nt":
+        if need_elevation:
+            if progress_callback:
+                progress_callback(96, "Requesting elevation to apply update...")
+            # Use PowerShell to start an elevated PowerShell which runs the script
+            elevate_cmd = [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                f"Start-Process -FilePath powershell -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File \"{ps_script}\"' -Verb RunAs"
+            ]
+            subprocess.Popen(elevate_cmd, close_fds=True, startupinfo=win_startupinfo, creationflags=win_creationflags)
+        else:
+            ps_args = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", ps_script]
+            subprocess.Popen(ps_args, close_fds=True, startupinfo=win_startupinfo, creationflags=win_creationflags)
+    else:
+        # Non-Windows fallback: run the script with the default shell (best-effort)
+        try:
+            subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps_script])
+        except Exception:
+            pass
+
+    # Optionally spawn a small monitor script (Python) that can watch the status file
+    monitor_script = os.path.join(temp_dir, f"{REPO_NAME}_update_monitor.py")
+    monitor_contents = f"""
+import time, json, sys, os
+from pathlib import Path
+status = Path(sys.argv[1])
+log = Path(sys.argv[2]) if len(sys.argv) > 2 else None
+poll = 0.5
+while True:
+    if status.exists():
+        try:
+            data = json.loads(status.read_text(encoding='utf-8'))
+            exitcode = int(data.get('exit', -1))
+        except Exception:
+            exitcode = -1
+        # If failure, try to open the log with the default app
+        if exitcode != 0 and log and log.exists():
+            try:
+                if os.name == 'nt':
+                    os.startfile(str(log))
+                else:
+                    import webbrowser
+                    webbrowser.open(str(log))
+            except Exception:
+                pass
+        break
+    time.sleep(poll)
+"""
+
+    try:
+        with open(monitor_script, 'w', encoding='utf-8') as mf:
+            mf.write(monitor_contents)
+        # Launch detached monitor so it can run after this process exits
+        try:
+            if os.name == 'nt':
+                DETACHED = 0x00000008
+                subprocess.Popen([sys.executable, monitor_script, status_path, log_path], close_fds=True, startupinfo=win_startupinfo, creationflags=win_creationflags | DETACHED)
+            else:
+                subprocess.Popen([sys.executable, monitor_script, status_path, log_path], close_fds=True)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
     if progress_callback:
         progress_callback(100, "Update applied (background)")
-    return {"action": "script", "script": ps_script}
+    return {"action": "script", "script": ps_script, "elevated": need_elevation, "log": log_path, "status": status_path}

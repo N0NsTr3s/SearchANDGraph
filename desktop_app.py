@@ -120,9 +120,14 @@ class UpdateDialog(QDialog):
         self._close_btn.setEnabled(False)
         self._close_btn.clicked.connect(self._on_close)
 
+        self._view_log_btn = QPushButton("View Update Log")
+        self._view_log_btn.setEnabled(False)
+        self._view_log_btn.clicked.connect(self._on_view_log)
+
         layout = QVBoxLayout(self)
         layout.addWidget(self._label)
         layout.addWidget(self._bar)
+        layout.addWidget(self._view_log_btn)
         layout.addWidget(self._close_btn)
 
         # Worker/thread setup
@@ -137,6 +142,12 @@ class UpdateDialog(QDialog):
         # Start
         self._thread.start()
 
+        # polling timer for update status/log (populated after run finishes)
+        self._result: dict = {}
+        self._poll_timer = QTimer(self)
+        self._poll_timer.setInterval(1000)
+        self._poll_timer.timeout.connect(self._poll_update_status)
+
     def _on_progress(self, pct: int, msg: str) -> None:
         try:
             self._bar.setValue(int(pct))
@@ -145,16 +156,42 @@ class UpdateDialog(QDialog):
             pass
 
     def _on_finished(self, result: dict) -> None:
-        self._label.setText("Update started in background.")
+        self._result = result or {}
+        action = self._result.get("action")
+        if action == "installer":
+            self._label.setText("Installer launched.")
+            self._bar.setValue(100)
+            self._close_btn.setEnabled(True)
+            # Installer launched; safe to quit app
+            try:
+                self._thread.quit()
+                self._thread.wait(2000)
+            except Exception:
+                pass
+            QApplication.quit()
+            return
+
+        # action == script (archive flow)
+        self._label.setText("Update started in background. Waiting for completion...")
         self._bar.setValue(100)
         self._close_btn.setEnabled(True)
-        # Clean up thread
+
+        # Enable view-log button immediately if the log already exists
+        log = self._result.get("log")
+        if log and os.path.exists(log):
+            self._view_log_btn.setEnabled(True)
+
+        # Start polling for a status file that the script will write when finished
+        status = self._result.get("status")
+        if status:
+            self._status_path = status
+            self._poll_timer.start()
+
         try:
             self._thread.quit()
             self._thread.wait(2000)
         except Exception:
             pass
-        QApplication.quit()
 
     def _on_error(self, err: str) -> None:
         self._label.setText(f"Update failed: {err}")
@@ -167,6 +204,43 @@ class UpdateDialog(QDialog):
 
     def _on_close(self) -> None:
         self.accept()
+
+    def _on_view_log(self) -> None:
+        try:
+            log = self._result.get("log") if isinstance(self._result, dict) else None
+            if log and os.path.exists(log):
+                from PyQt6.QtCore import QUrl
+                QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.abspath(log)))
+        except Exception:
+            pass
+
+    def _poll_update_status(self) -> None:
+        try:
+            status = getattr(self, "_status_path", None)
+            if not status:
+                return
+            if os.path.exists(status):
+                # Read status JSON
+                try:
+                    import json
+
+                    with open(status, "r", encoding="utf-8") as sf:
+                        data = json.load(sf)
+                    exitcode = int(data.get("exit", -1))
+                except Exception:
+                    exitcode = -1
+
+                log = self._result.get("log")
+                if exitcode == 0:
+                    self._label.setText("Update applied successfully.")
+                else:
+                    self._label.setText(f"Update failed (exit {exitcode}). Click 'View Update Log' to inspect.")
+                    if log and os.path.exists(log):
+                        self._view_log_btn.setEnabled(True)
+
+                self._poll_timer.stop()
+        except Exception:
+            pass
 
 
 class ExternalLinksPage(QWebEnginePage):
