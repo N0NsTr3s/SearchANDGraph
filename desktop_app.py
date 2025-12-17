@@ -99,8 +99,9 @@ class UpdateWorker(QObject):
                 except Exception:
                     pass
 
-            # Exit the app immediately after launching the updater so the PowerShell wait loop can proceed.
-            result = perform_update(self._release, silent=True, progress_callback=cb, exit_after_launch=True)
+            # EXE-only flow: download installer, launch it elevated, then return.
+            # The installer handles closing the app via AppMutex/CloseApplications.
+            result = perform_update(self._release, silent=False, progress_callback=cb)
             self.finished.emit(result or {})
         except Exception as e:
             self.error.emit(str(e))
@@ -121,14 +122,9 @@ class UpdateDialog(QDialog):
         self._close_btn.setEnabled(False)
         self._close_btn.clicked.connect(self._on_close)
 
-        self._view_log_btn = QPushButton("View Update Log")
-        self._view_log_btn.setEnabled(False)
-        self._view_log_btn.clicked.connect(self._on_view_log)
-
         layout = QVBoxLayout(self)
         layout.addWidget(self._label)
         layout.addWidget(self._bar)
-        layout.addWidget(self._view_log_btn)
         layout.addWidget(self._close_btn)
 
         # Worker/thread setup
@@ -143,11 +139,7 @@ class UpdateDialog(QDialog):
         # Start
         self._thread.start()
 
-        # polling timer for update status/log (populated after run finishes)
         self._result: dict = {}
-        self._poll_timer = QTimer(self)
-        self._poll_timer.setInterval(1000)
-        self._poll_timer.timeout.connect(self._poll_update_status)
 
     def _on_progress(self, pct: int, msg: str) -> None:
         try:
@@ -159,34 +151,20 @@ class UpdateDialog(QDialog):
     def _on_finished(self, result: dict) -> None:
         self._result = result or {}
         action = self._result.get("action")
-        if action == "installer":
-            self._label.setText("Installer launched.")
+        if action in {"installer_launched", "installer"}:
+            self._label.setText("Installer launched.\nPlease close this window and\nFollow the installer to complete the update.")
             self._bar.setValue(100)
             self._close_btn.setEnabled(True)
-            # Installer launched; safe to quit app
             try:
                 self._thread.quit()
                 self._thread.wait(2000)
             except Exception:
                 pass
-            QApplication.quit()
             return
 
-        # action == script (archive flow)
-        self._label.setText("Update started in background. Waiting for completion...")
+        self._label.setText("Update finished.")
         self._bar.setValue(100)
         self._close_btn.setEnabled(True)
-
-        # Enable view-log button immediately if the log already exists
-        log = self._result.get("log")
-        if log and os.path.exists(log):
-            self._view_log_btn.setEnabled(True)
-
-        # Start polling for a status file that the script will write when finished
-        status = self._result.get("status")
-        if status:
-            self._status_path = status
-            self._poll_timer.start()
 
         try:
             self._thread.quit()
@@ -205,44 +183,6 @@ class UpdateDialog(QDialog):
 
     def _on_close(self) -> None:
         self.accept()
-
-    def _on_view_log(self) -> None:
-        try:
-            log = self._result.get("log") if isinstance(self._result, dict) else None
-            if log and os.path.exists(log):
-                from PyQt6.QtCore import QUrl
-                QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.abspath(log)))
-        except Exception:
-            pass
-
-    def _poll_update_status(self) -> None:
-        try:
-            status = getattr(self, "_status_path", None)
-            if not status:
-                return
-            if os.path.exists(status):
-                # Read status JSON
-                try:
-                    import json
-
-                    with open(status, "r", encoding="utf-8") as sf:
-                        data = json.load(sf)
-                    exitcode = int(data.get("exit", -1))
-                except Exception:
-                    exitcode = -1
-
-                log = self._result.get("log")
-                # Robocopy exit codes: 0-7 are success, >=8 indicate failure.
-                if 0 <= exitcode < 8:
-                    self._label.setText("Update applied successfully.")
-                else:
-                    self._label.setText(f"Update failed (exit {exitcode}). Click 'View Update Log' to inspect.")
-                    if log and os.path.exists(log):
-                        self._view_log_btn.setEnabled(True)
-
-                self._poll_timer.stop()
-        except Exception:
-            pass
 
 
 class ExternalLinksPage(QWebEnginePage):
