@@ -291,7 +291,12 @@ async def main(
         config.crawler.web_search_min_relevance = web_search_min_relevance
 
     # Optional config overrides driven by the desktop UI
-    if preferred_sources is not None or blacklisted_sources is not None:
+    # Only apply merging when the UI provided at least one meaningful (non-empty)
+    # preferred or blacklisted source. Empty lists/strings mean "no override".
+    prefer_has_items = bool(preferred_sources and any(s and s.strip() for s in preferred_sources))
+    blacklist_has_items = bool(blacklisted_sources and any(s and s.strip() for s in blacklisted_sources))
+
+    if prefer_has_items or blacklist_has_items:
         current_sources = list(getattr(config.crawler, 'sources', []) or [])
         deny = {s.strip().lower() for s in (blacklisted_sources or []) if s and s.strip()}
         prefer = [s.strip() for s in (preferred_sources or []) if s and s.strip()]
@@ -300,7 +305,7 @@ async def main(
         filtered = [s for s in current_sources if s.strip().lower() not in deny]
 
         # Move preferred to front (keep order, avoid duplicates)
-        preferred_ordered = []
+        preferred_ordered: list[str] = []
         for s in prefer:
             if s.strip().lower() in deny:
                 continue
@@ -360,6 +365,20 @@ async def main(
     logger.info("=" * 60)
     
     # Initialize components with cache support
+    # Respect UI-provided preferred/blacklist lists if they are meaningful (non-empty).
+    ui_prefer = preferred_sources if preferred_sources else None
+    ui_blacklist = blacklisted_sources if blacklisted_sources else None
+
+    if ui_prefer is not None:
+        prefer_clean = [s.strip() for s in ui_prefer if s and s.strip()]
+        if prefer_clean:
+            config.crawler.preferred_sources = prefer_clean
+
+    if ui_blacklist is not None:
+        blacklist_clean = [s.strip() for s in ui_blacklist if s and s.strip()]
+        if blacklist_clean:
+            config.crawler.blacklisted_sources = blacklist_clean
+
     crawler = WebCrawler(config.crawler, config.cache)
     nlp_processor = NLPProcessor(config.nlp, config.cache)
     
@@ -378,7 +397,11 @@ async def main(
     # Initialize multi-source discovery if enabled
     source_discovery = None
     if config.crawler.multi_source_discovery:
-        source_discovery = MultiSourceDiscovery(config.crawler.sources)
+        source_discovery = MultiSourceDiscovery(
+            config.crawler.sources,
+            preferred=getattr(config.crawler, 'preferred_sources', None),
+            blacklisted=getattr(config.crawler, 'blacklisted_sources', None)
+        )
     
     # Try to load existing graph if incremental building is enabled
     if config.graph.enable_incremental:

@@ -54,6 +54,22 @@ class WebCrawler:
         self._used_search_urls: set[str] = set()
         self._search_attempts_by_query: dict[str, int] = {}
         self._max_search_attempts_per_query = 3
+        # Source policy (preferred / blacklisted). These may be provided via
+        # constructor args or found on the config object. They are normalized
+        # to token sets for quick matching against URL hostnames.
+        self.preferred_sources_set: set[str] = set()
+        self.blacklisted_sources_set: set[str] = set()
+        self._preferred_boost: float = 1.5  # multiply relevance for preferred sources
+
+        # Try to read lists from config if present (backwards compatible)
+        prefer = getattr(self.config, 'preferred_sources', None) or getattr(self.config, 'sources', None)
+        blacklist = getattr(self.config, 'blacklisted_sources', None)
+        # If config.sources is used and UI provided a separate preferred list,
+        # prefer should remain as-is (config.sources often lists available sources)
+        if isinstance(prefer, (list, tuple)):
+            self.preferred_sources_set = {self._normalize_source_token(s) for s in prefer if s}
+        if isinstance(blacklist, (list, tuple)):
+            self.blacklisted_sources_set = {self._normalize_source_token(s) for s in blacklist if s}
         
         # Initialize document extractor for PDFs and images
         from document_extractor import DocumentExtractor
@@ -72,6 +88,93 @@ class WebCrawler:
         else:
             self.cache = None
             logger.info("Disk cache disabled")
+
+    @staticmethod
+    def _normalize_source_token(token: str) -> str:
+        """
+        Normalize a source token supplied by UI/config into a canonical identifier.
+        Examples: 'Wikipedia' -> 'wikipedia', 'en.wikipedia.org' -> 'wikipedia',
+        'web' -> 'web'. We strip protocols, www and lower-case.
+        """
+        if not token:
+            return ""
+        t = token.strip().lower()
+        # If user passed a URL or domain, extract meaningful part
+        try:
+            if '://' in t or '.' in t:
+                # remove protocol
+                if '://' in t:
+                    t = t.split('://', 1)[1]
+                # strip path
+                t = t.split('/', 1)[0]
+                # drop port
+                t = t.split(':', 1)[0]
+                # drop leading www.
+                if t.startswith('www.'):
+                    t = t[4:]
+                # reduce to second-level name when obvious (wikipedia.org -> wikipedia)
+                parts = t.split('.')
+                if len(parts) >= 2:
+                    # prefer the left-most non-subdomain token
+                    for p in parts:
+                        if p and p not in ('www', 'm'):
+                            return p
+        except Exception:
+            pass
+        return t
+
+    def _url_to_hostname(self, url: str) -> str:
+        try:
+            parsed = urlparse(url)
+            host = (parsed.netloc or '').lower()
+            if host.startswith('www.'):
+                host = host[4:]
+            # drop port
+            host = host.split(':', 1)[0]
+            return host
+        except Exception:
+            return url.lower()
+
+    def _get_source_tag_for_url(self, url: str) -> str:
+        """Map a URL to a logical source token for matching against preferred/blacklist sets."""
+        host = self._url_to_hostname(url)
+        # Known source short-circuits
+        known = ('wikipedia', 'wikidata', 'dbpedia')
+        for k in known:
+            if k in host:
+                return k
+        # Default: return the primary hostname token (left-most label)
+        parts = host.split('.')
+        if parts:
+            return parts[0]
+        return host
+
+    def _is_blacklisted_url(self, url: str) -> bool:
+        if not self.blacklisted_sources_set:
+            return False
+        host = self._url_to_hostname(url)
+        # blacklist matches any token substring in hostname or source tag
+        for token in self.blacklisted_sources_set:
+            if not token:
+                continue
+            if token in host:
+                return True
+            if token == self._get_source_tag_for_url(url):
+                return True
+        return False
+
+    def _is_preferred_url(self, url: str) -> bool:
+        if not self.preferred_sources_set:
+            return False
+        host = self._url_to_hostname(url)
+        for token in self.preferred_sources_set:
+            if not token:
+                continue
+            if token in host:
+                return True
+            if token == self._get_source_tag_for_url(url):
+                return True
+        return False
     async def start(self):
         """Start the browser instance."""
         logger.info("Starting browser...")
@@ -2606,12 +2709,21 @@ class WebCrawler:
                 ):
                     continue
 
+                # Skip blacklisted search results
+                if self._is_blacklisted_url(url):
+                    logger.debug(f"Skipping blacklisted search result: {url}")
+                    continue
+
                 combined_score = self._calculate_url_relevance(
                     normalized_url,
                     base_query,
                     discovered_entities
                 )
                 combined_score = max(combined_score, score * 10.0)
+
+                # Apply preferred boost when applicable
+                if self._is_preferred_url(url):
+                    combined_score = combined_score * self._preferred_boost
 
                 new_entries.append((url, combined_score, 0))
                 self._used_search_urls.add(normalized_url)
@@ -2655,21 +2767,46 @@ class WebCrawler:
         self._search_attempts_by_query = {}
 
         # Priority queue stored as (url, relevance_score, depth)
-        urls_to_crawl: list[tuple[str, float, int]] = [(start_url, 100.0, 0)]
-        queued_normalized: set[str] = {normalized_start}
-        self._used_search_urls.add(normalized_start)
+        urls_to_crawl: list[tuple[str, float, int]] = []
+        queued_normalized: set[str] = set()
+
+        # Start URL: skip if blacklisted, otherwise seed with high relevance.
+        if start_url and not self._is_blacklisted_url(start_url):
+            urls_to_crawl.append((start_url, 100.0, 0))
+            queued_normalized.add(normalized_start)
+            self._used_search_urls.add(normalized_start)
+        else:
+            if start_url:
+                logger.info(f"Start URL '{start_url}' skipped because it matches blacklist policy")
 
         if additional_seed_urls:
             logger.info(f"Adding {len(additional_seed_urls)} additional seed URLs to queue")
+            preferred_seeds: list[tuple[str, float, int]] = []
+            other_seeds: list[tuple[str, float, int]] = []
             for seed_url in additional_seed_urls:
                 normalized_seed = self._normalize_url(seed_url)
                 if normalized_seed in queued_normalized:
                     continue
+                if self._is_blacklisted_url(seed_url):
+                    logger.debug(f"Skipping blacklisted seed URL: {seed_url}")
+                    continue
                 relevance = self._calculate_url_relevance(normalized_seed, query, None)
-                urls_to_crawl.append((seed_url, relevance, 0))
+                # Apply preferred boost when applicable
+                if self._is_preferred_url(seed_url):
+                    relevance = relevance * self._preferred_boost
+                    preferred_seeds.append((seed_url, relevance, 0))
+                    logger.debug(f"  Added preferred seed (relevance {relevance:.2f}): {seed_url}")
+                else:
+                    other_seeds.append((seed_url, relevance, 0))
+
                 queued_normalized.add(normalized_seed)
                 self._used_search_urls.add(normalized_seed)
-                logger.debug(f"  Added seed (relevance {relevance:.2f}): {seed_url}")
+
+            # Ensure preferred seeds are enqueued first (but not exclusively)
+            if preferred_seeds:
+                urls_to_crawl.extend(preferred_seeds)
+            if other_seeds:
+                urls_to_crawl.extend(other_seeds)
 
         content_url_pairs: list[tuple[str, str]] = []
         processed_urls: set[str] = set()
@@ -2912,6 +3049,15 @@ class WebCrawler:
                             discovered_entities,
                         )
 
+                        # Skip blacklisted links entirely
+                        if self._is_blacklisted_url(link):
+                            logger.debug(f"Skipping blacklisted discovered link: {link}")
+                            continue
+
+                        # Boost relevance for preferred sources (priority, not exclusivity)
+                        if self._is_preferred_url(link):
+                            link_relevance = link_relevance * self._preferred_boost
+
                         urls_to_crawl.append((link, link_relevance, new_depth))
                         queued_normalized.add(normalized_link)
                         logger.debug(
@@ -2959,6 +3105,26 @@ class WebCrawler:
 
         logger.info(f"BFS crawl complete: {len(relevant_urls)} relevant pages visited")
         logger.info(f"Link graph contains {len(link_graph)} nodes")
+
+        # Runtime checks: ensure no blacklisted URLs made it into results.
+        try:
+            blacklisted_in_relevant = [u for u in list(relevant_urls) if self._is_blacklisted_url(u)]
+            if blacklisted_in_relevant:
+                logger.error(f"Blacklisted URLs found in crawl results: {blacklisted_in_relevant}")
+                # Defensive: remove blacklisted entries from results to avoid exposing them downstream
+                bl_normalized = {self._normalize_url(u) for u in blacklisted_in_relevant}
+                relevant_urls = {u for u in relevant_urls if self._normalize_url(u) not in bl_normalized}
+                link_graph = {k: v for k, v in link_graph.items() if self._normalize_url(k) not in bl_normalized}
+                content_url_pairs = [pair for pair in content_url_pairs if self._normalize_url(pair[1]) not in bl_normalized]
+                logger.info(f"Removed {len(blacklisted_in_relevant)} blacklisted URLs from results")
+
+            # Assert invariant (non-fatal): no blacklisted URLs remain
+            try:
+                assert not any(self._is_blacklisted_url(u) for u in relevant_urls)
+            except AssertionError:
+                logger.exception("Runtime assertion failed: blacklisted URLs still present after cleanup")
+        except Exception as e:
+            logger.exception(f"Error during post-crawl blacklist sanity check: {e}")
 
         return content_url_pairs, relevant_urls, link_graph
     

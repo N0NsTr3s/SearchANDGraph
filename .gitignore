@@ -22,6 +22,7 @@ installer.iss
 Output/
 SearchANDGraph/
 assets/
+tests/
 # Logs / runtime artifacts
 logs/
 *.log

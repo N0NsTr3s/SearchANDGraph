@@ -275,8 +275,8 @@ class ScanRequest:
     enable_web_search: bool
     download_pdfs: bool
     base_dir: str = "scans"
-    preferred_sources: tuple[str, ...] = ()
-    blacklisted_sources: tuple[str, ...] = ()
+    preferred_sources: tuple[str, ...] | None = None
+    blacklisted_sources: tuple[str, ...] | None = None
     viz_max_nodes: Optional[int] = None
     viz_min_edge_confidence: Optional[float] = None
     viz_remove_isolated_nodes: Optional[bool] = None
@@ -298,8 +298,8 @@ class ScanRequest:
 @dataclass
 class UserSettings:
     base_dir: str = "scans"
-    preferred_sources: list[str] = None  # type: ignore[assignment]
-    blacklisted_sources: list[str] = None  # type: ignore[assignment]
+    preferred_sources: list[str] | None = None  # type: ignore[assignment]
+    blacklisted_sources: list[str] | None = None  # type: ignore[assignment]
     recent_files: list[str] = None  # type: ignore[assignment]
     viz_max_nodes: Optional[int] = None
     viz_min_edge_confidence: Optional[float] = None
@@ -319,10 +319,8 @@ class UserSettings:
     nlp_min_relation_confidence: Optional[float] = None
 
     def __post_init__(self) -> None:
-        if self.preferred_sources is None:
-            self.preferred_sources = []
-        if self.blacklisted_sources is None:
-            self.blacklisted_sources = []
+        # Preserve `None` for preferred/blacklisted to indicate "unset";
+        # only `recent_files` should default to an empty list.
         if self.recent_files is None:
             self.recent_files = []
 
@@ -330,8 +328,8 @@ class UserSettings:
     def from_dict(data: dict) -> "UserSettings":
         return UserSettings(
             base_dir=str(data.get("base_dir") or "scans"),
-            preferred_sources=[str(s) for s in (data.get("preferred_sources") or [])],
-            blacklisted_sources=[str(s) for s in (data.get("blacklisted_sources") or [])],
+            preferred_sources=(None if data.get("preferred_sources") is None else [str(s) for s in data.get("preferred_sources")]),
+            blacklisted_sources=(None if data.get("blacklisted_sources") is None else [str(s) for s in data.get("blacklisted_sources")]),
             recent_files=[str(s) for s in (data.get("recent_files") or [])],
             viz_max_nodes=data.get("viz_max_nodes"),
             viz_min_edge_confidence=data.get("viz_min_edge_confidence"),
@@ -351,8 +349,8 @@ class UserSettings:
     def to_dict(self) -> dict:
         return {
             "base_dir": self.base_dir,
-            "preferred_sources": list(self.preferred_sources or []),
-            "blacklisted_sources": list(self.blacklisted_sources or []),
+            "preferred_sources": None if self.preferred_sources is None else list(self.preferred_sources),
+            "blacklisted_sources": None if self.blacklisted_sources is None else list(self.blacklisted_sources),
             "recent_files": list(self.recent_files or []),
             "viz_max_nodes": self.viz_max_nodes,
             "viz_min_edge_confidence": self.viz_min_edge_confidence,
@@ -533,7 +531,10 @@ class OptionsDialog(QDialog):
             return [p for p in parts if p]
 
         preferred = _split_csv(self.preferred_sources_edit.text())
+        preferred = preferred if preferred else None
+
         blacklisted = _split_csv(self.blacklisted_sources_edit.text())
+        blacklisted = blacklisted if blacklisted else None
 
         max_nodes_raw = (self.viz_max_nodes_edit.text() or "").strip()
         max_nodes: Optional[int]
@@ -681,8 +682,8 @@ class ScanWorker(QObject):
                     browser_headless=self._request.headless,
                     enable_web_search=self._request.enable_web_search,
                     web_search_download_pdfs=self._request.download_pdfs,
-                    preferred_sources=list(self._request.preferred_sources),
-                    blacklisted_sources=list(self._request.blacklisted_sources),
+                    preferred_sources=None if not self._request.preferred_sources else list(self._request.preferred_sources),
+                    blacklisted_sources=None if not self._request.blacklisted_sources else list(self._request.blacklisted_sources),
                     viz_max_nodes=self._request.viz_max_nodes,
                     viz_min_edge_confidence=self._request.viz_min_edge_confidence,
                     viz_remove_isolated_nodes=self._request.viz_remove_isolated_nodes,

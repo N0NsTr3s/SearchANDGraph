@@ -11,15 +11,19 @@ logger = setup_logger(__name__)
 
 class MultiSourceDiscovery:
     """Handles entity discovery across multiple sources."""
-    
-    def __init__(self, sources: Optional[List[str]] = None):
+
+    def __init__(self, sources: Optional[List[str]] = None, preferred: Optional[List[str]] = None, blacklisted: Optional[List[str]] = None):
         """
         Initialize multi-source discovery.
-        
+
         Args:
             sources: List of source names to use (wikipedia, wikidata, dbpedia, web)
+            preferred: Optional list of preferred source tokens (priority only)
+            blacklisted: Optional list of blacklisted source tokens (deny)
         """
         self.sources = sources or ['wikipedia', 'wikidata', 'dbpedia']
+        self.preferred_set = {s.strip().lower() for s in (preferred or []) if s and s.strip()}
+        self.blacklist_set = {s.strip().lower() for s in (blacklisted or []) if s and s.strip()}
         logger.info(f"Multi-source discovery enabled for: {', '.join(self.sources)}")
     
     def discover_urls_for_entity(self, entity: str, lang: str = 'en') -> Dict[str, List[str]]:
@@ -37,7 +41,7 @@ class MultiSourceDiscovery:
         entity_encoded = quote(entity.replace(' ', '_'))
         
         # Wikipedia - Try both the specified language and English
-        if 'wikipedia' in self.sources:
+        if 'wikipedia' in self.sources and 'wikipedia' not in self.blacklist_set:
             wiki_urls = [
                 f"https://{lang}.wikipedia.org/wiki/{entity_encoded}"
             ]
@@ -53,13 +57,13 @@ class MultiSourceDiscovery:
         # DBpedia - Only if explicitly requested
         # DBpedia resources have limited text content, mostly structured data
         # Better to rely on Wikipedia which has richer narrative content
-        if 'dbpedia' in self.sources:
+        if 'dbpedia' in self.sources and 'dbpedia' not in self.blacklist_set:
             urls['dbpedia'] = [
                 f"http://dbpedia.org/resource/{entity_encoded}"
             ]
         
         # General web search (DuckDuckGo) - Usually too noisy, skip unless explicitly requested
-        if 'web' in self.sources:
+        if 'web' in self.sources and 'web' not in self.blacklist_set:
             search_query = quote(entity)
             urls['web'] = [
                 f"https://duckduckgo.com/?q={search_query}"
@@ -85,6 +89,9 @@ class MultiSourceDiscovery:
             entity_urls = self.discover_urls_for_entity(entity, lang)
             
             for source, urls in entity_urls.items():
+                # Skip blacklisted sources at generation time
+                if source in self.blacklist_set:
+                    continue
                 for url in urls:
                     all_urls.append((url, entity, source))
         
@@ -109,9 +116,14 @@ class MultiSourceDiscovery:
             'web': 4
         }
         
-        sorted_urls = sorted(
-            urls_with_sources,
-            key=lambda x: source_priority.get(x[2], 999)
-        )
+        def key_fn(item: tuple[str, str, str]) -> float:
+            src = item[2]
+            base = source_priority.get(src, 999)
+            # Preferred sources get slightly better priority (lower key)
+            if src in self.preferred_set:
+                return base - 0.5
+            return base
+
+        sorted_urls = sorted(urls_with_sources, key=key_fn)
         
         return sorted_urls
