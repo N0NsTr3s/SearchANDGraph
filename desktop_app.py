@@ -20,7 +20,7 @@ from typing import Optional
 
 from config import CrawlerConfig, NLPConfig, VisualizationConfig
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, Qt, QUrl, QTimer, QEvent
-from PyQt6.QtGui import QAction, QDesktopServices
+from PyQt6.QtGui import QAction, QDesktopServices, QIcon
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -780,7 +780,16 @@ class MainWindow(QMainWindow):
         super().__init__()
         from version import CURRENT_VERSION
         self.setWindowTitle(f"SearchANDGraph - {CURRENT_VERSION}")
-        self.resize(1200, 780)
+
+        # Set window/logo icon (expects assets\logoSAG32x32.ico)
+        try:
+            logo_path = Path(__file__).resolve().parent / "assets" / "logoSAG32x32.ico"
+            if logo_path.exists():
+                self.setWindowIcon(QIcon(str(logo_path)))
+        except Exception:
+            pass
+
+        self.resize(1280, 720)
 
         self._thread: Optional[QThread] = None
         self._worker: Optional[ScanWorker] = None
@@ -1368,7 +1377,13 @@ def main() -> None:
     _mutex_handle = hold_app_mutex()
 
     app = QApplication(sys.argv)
-
+    # Set application icon (used by the OS / taskbar). Expects assets\logoSAG256x256.ico
+    try:
+        ico_path = Path(__file__).resolve().parent / "assets" / "logoSAG256x256.ico"
+        if ico_path.exists():
+            app.setWindowIcon(QIcon(str(ico_path)))
+    except Exception:
+        pass
     # Optional escape hatch for development: run update check after QApplication exists
     if not os.environ.get("SAG_DISABLE_UPDATES"):
         try:

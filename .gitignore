@@ -21,10 +21,11 @@ pyvenv.cfg
 installer.iss
 Output/
 SearchANDGraph/
+assets/
 # Logs / runtime artifacts
 logs/
 *.log
-
+build.ps1
 # App-generated data/output
 cache/
 scans/
