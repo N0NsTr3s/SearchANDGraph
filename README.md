@@ -72,14 +72,6 @@ Some features require additional non-Python prerequisites:
 
 If these aren’t available, the pipeline will still run, but document/OCR/table extraction may be reduced.
 
-## Security Scanning (CI)
-
-GitHub Actions workflow: [.github/workflows/codeql.yml](.github/workflows/codeql.yml)
-
-- **CodeQL** runs on pushes and PRs to `main`/`master`, plus a weekly schedule (Mondays 02:56 UTC) and manual `workflow_dispatch`.
-- **Dependency Review (PR diffs)** runs only on pull requests (it requires a PR diff context).
-- **Dependency audit (pip-audit)** runs and reports findings in the workflow summary, but is configured to be **non-blocking** (does not fail the job).
-
 ## Project Layout (high level)
 
 - `main_refactored.py`: main scan orchestration entry point
@@ -91,4 +83,5 @@ GitHub Actions workflow: [.github/workflows/codeql.yml](.github/workflows/codeql
 - `graph_builder.py`: knowledge graph building/merging
 - `visualizer.py` / `interactive_viz.py`: HTML graph visualizations
 - `scan_manager.py`: standardized scan directory + artifact paths
+
 
