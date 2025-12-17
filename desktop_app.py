@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from .config import CrawlerConfig, NLPConfig, VisualizationConfig
+from config import CrawlerConfig, NLPConfig, VisualizationConfig
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, Qt, QUrl, QTimer, QEvent
 from PyQt6.QtGui import QAction, QDesktopServices, QIcon
 from PyQt6.QtWidgets import (
@@ -1379,7 +1379,7 @@ def main() -> None:
     app = QApplication(sys.argv)
     # Set application icon (used by the OS / taskbar). Expects assets\logoSAG256x256.ico
     try:
-        ico_path = Path(__file__).resolve().parent / "assets" / "logoSAG256x256.ico"
+        ico_path = Path(__file__).resolve().parent / "assets" / "logoSAG32x32.ico"
         if ico_path.exists():
             app.setWindowIcon(QIcon(str(ico_path)))
     except Exception:
