@@ -124,6 +124,8 @@ def perform_update(
             si.wShowWindow = 0
             win_startupinfo = si
             win_creationflags = subprocess.CREATE_NO_WINDOW
+            # Detached process flag (don't keep child attached to our console)
+            DETACHED_PROCESS = 0x00000008
         except Exception:
             win_startupinfo = None
             win_creationflags = 0
@@ -170,7 +172,8 @@ def perform_update(
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 startupinfo=win_startupinfo,
-                creationflags=win_creationflags,
+                creationflags=(win_creationflags | DETACHED_PROCESS) if os.name == 'nt' else win_creationflags,
+                close_fds=True,
             )
         except Exception as e:
             raise RuntimeError(f"Failed to launch installer: {e}")
@@ -316,10 +319,10 @@ Remove-Item $oldDir -Recurse -Force -ErrorAction SilentlyContinue
                 ),
             ]
             # Don't hide this bootstrapper too aggressively; UAC prompt must appear reliably.
-            subprocess.Popen(elevate_cmd, close_fds=True)
+            subprocess.Popen(elevate_cmd, close_fds=True, startupinfo=win_startupinfo, creationflags=(win_creationflags | DETACHED_PROCESS))
         else:
             ps_args = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", ps_script]
-            subprocess.Popen(ps_args, close_fds=True, startupinfo=win_startupinfo, creationflags=win_creationflags)
+            subprocess.Popen(ps_args, close_fds=True, startupinfo=win_startupinfo, creationflags=(win_creationflags | DETACHED_PROCESS))
     else:
         # Non-Windows fallback: run the script with the default shell (best-effort)
         try:
