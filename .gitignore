@@ -31,6 +31,7 @@ build.ps1
 cache/
 scans/
 user_settings.json
+ReleaseNote.md
 # Local editor / OS
 .vscode/
 .DS_Store
