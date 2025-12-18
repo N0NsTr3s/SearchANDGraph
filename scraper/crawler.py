@@ -14,8 +14,12 @@ import nodriver as uc
 import inspect
 import trafilatura
 from bs4 import BeautifulSoup
-from ..utils.config import CrawlerConfig, CacheConfig
-from ..utils.logger import setup_logger
+try:
+    from ..utils.config import CrawlerConfig, CacheConfig
+    from ..utils.logger import setup_logger
+except:
+    from utils.config import CrawlerConfig, CacheConfig
+    from utils.logger import setup_logger
 import diskcache
 
 logger = setup_logger(__name__)
@@ -72,7 +76,7 @@ class WebCrawler:
             self.blacklisted_sources_set = {self._normalize_source_token(s) for s in blacklist if s}
         
         # Initialize document extractor for PDFs and images
-        from document_extractor import DocumentExtractor
+        from scraper.document_extractor import DocumentExtractor
         self.document_extractor = DocumentExtractor(
             download_dir=str(Path(self.config.checkpoint_file).parent / "downloads") if self.config.checkpoint_file else "downloads"
         )

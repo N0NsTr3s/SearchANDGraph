@@ -22,9 +22,13 @@ from bokeh.models import (
     HoverTool, Range1d, RangeSlider, Select, Slider, TapTool, TextInput
 )
 from bokeh.plotting import figure, from_networkx, output_file
-from ..utils.config import VisualizationConfig
-from ..utils.logger import setup_logger
-
+try:
+    from ..utils.config import VisualizationConfig
+    from ..utils.logger import setup_logger
+except:
+    from utils.config import VisualizationConfig
+    from utils.logger import setup_logger
+    
 logger = setup_logger(__name__)
 class GraphVisualizer:
     """Handles graph visualization using Bokeh."""

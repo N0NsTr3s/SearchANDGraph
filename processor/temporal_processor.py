@@ -9,7 +9,10 @@ from typing import List, Optional, Tuple, Dict, Any, TYPE_CHECKING
 import re
 from datetime import datetime
 import dateparser
-from ..utils.logger import setup_logger
+try:
+    from ..utils.logger import setup_logger
+except:
+    from utils.logger import setup_logger
 
 if TYPE_CHECKING:
     from spacy.tokens import Doc, Span

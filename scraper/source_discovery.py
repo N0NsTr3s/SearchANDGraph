@@ -3,7 +3,10 @@ Multi-source entity discovery module.
 Discovers URLs from multiple sources beyond Wikipedia.
 """
 from typing import List, Dict, Set, Optional
-from ..utils.logger import setup_logger
+try:
+    from ..utils.logger import setup_logger
+except:
+    from utils.logger import setup_logger
 from urllib.parse import quote
 
 logger = setup_logger(__name__)

@@ -10,7 +10,6 @@ from typing import List, Dict, Tuple, Set, Optional, Any
 from dataclasses import dataclass
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
-import concurrent.futures
 
 from utils.logger import setup_logger
 from urllib.parse import urlparse

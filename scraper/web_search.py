@@ -10,8 +10,11 @@ from typing import List, Tuple, Optional, Dict, Any
 from urllib.parse import quote_plus, urlparse, unquote, urljoin
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
-from ..utils.logger import setup_logger
-from advanced_search import SearchQuery, AdvancedSearchBuilder
+try:
+    from ..utils.logger import setup_logger
+except:
+    from utils.logger import setup_logger
+from scraper.advanced_search import SearchQuery, AdvancedSearchBuilder
 import requests
 logger = setup_logger(__name__)
 

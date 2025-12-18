@@ -3,8 +3,10 @@ Advanced search query builder with Google search operators.
 """
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
-from ..utils.logger import setup_logger
-
+try:
+    from ..utils.logger import setup_logger
+except:
+    from utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 

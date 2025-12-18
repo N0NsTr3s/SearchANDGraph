@@ -5,13 +5,13 @@ import translators as ts
 from typing import Optional, List
 from pathlib import Path
 import diskcache
-from config import CacheConfig
-from logger import setup_logger
+from utils.config import CacheConfig
+from utils.logger import setup_logger
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 from langdetect import detect, LangDetectException
 from unidecode import unidecode
-from cache_manager import CacheManager
+from utils.cache_manager import CacheManager
 
 logger = setup_logger(__name__)
 

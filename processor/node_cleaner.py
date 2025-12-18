@@ -5,8 +5,10 @@ Standardizes entity names before adding them to the graph.
 import re
 import unicodedata
 from unidecode import unidecode
-from ..utils.logger import setup_logger
-
+try:
+    from ..utils.logger import setup_logger
+except:
+    from utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 

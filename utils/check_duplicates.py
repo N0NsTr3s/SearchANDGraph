@@ -150,7 +150,7 @@ def analyze_graph(graph_file: str, similarity_threshold: float = 0.85, show_all:
         return
     
     # Convert to KnowledgeGraph instance
-    from graph_builder import KnowledgeGraph
+    from processor.graph_builder import KnowledgeGraph
     
     if isinstance(loaded_data, KnowledgeGraph):
         # Already a KnowledgeGraph instance

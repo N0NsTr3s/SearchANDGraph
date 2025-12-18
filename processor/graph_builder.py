@@ -11,10 +11,13 @@ import hashlib
 import os
 from collections import defaultdict
 from typing import Dict, List, Tuple, Set, Sequence, Optional, Union, cast
-from ..utils.logger import setup_logger
-from entity_disambiguation import EntityDisambiguator
-from node_cleaner import clean_node_name, clean_entity_dict
-from provenance import Provenance, migrate_legacy_reasons, provenances_to_dicts, dicts_to_provenances, deduplicate_provenances
+try:
+    from ..utils.logger import setup_logger
+except:
+    from utils.logger import setup_logger
+from processor.entity_disambiguation import EntityDisambiguator
+from processor.node_cleaner import clean_node_name, clean_entity_dict
+from processor.provenance import Provenance, migrate_legacy_reasons, provenances_to_dicts, dicts_to_provenances, deduplicate_provenances
 import re
 logger = setup_logger(__name__)
 
@@ -120,7 +123,7 @@ class KnowledgeGraph:
             return canonical_id
         
         # Fallback: use cleaned and ASCII-normalized text for consistency
-        from node_cleaner import normalize_to_ascii
+        from processor.node_cleaner import normalize_to_ascii
         cleaned = clean_node_name(entity_text)
         if cleaned:
             return normalize_to_ascii(cleaned)
@@ -655,10 +658,16 @@ class KnowledgeGraph:
         try:
             # Serialize graph to node-link JSON (safe, portable)
             graph_data = nx.readwrite.json_graph.node_link_data(self.graph)
+            # Serialize relations as a list of [source, target, reasons] so JSON keys
+            # are always strings (JSON object keys must be strings).
+            relations_serializable = []
+            for (src, tgt), reasons in self.relations.items():
+                relations_serializable.append([src, tgt, reasons])
+
             data = {
                 'graph': graph_data,
                 'entities': self.entities,
-                'relations': dict(self.relations),
+                'relations': relations_serializable,
                 'entity_mapping': self.entity_mapping,
                 'metadata': self.metadata
             }
@@ -760,13 +769,35 @@ class KnowledgeGraph:
                 old_stats = self.get_statistics()
                 self.graph = nx.compose(self.graph, loaded_graph)
                 self.entities.update(data.get('entities', {}))
-                for key, value in data.get('relations', {}).items():
-                    if key in self.relations:
-                        for reason in value:
-                            if reason not in self.relations[key]:
-                                self.relations[key].append(reason)
-                    else:
-                        self.relations[key] = value
+                # Support legacy dict mappings as well as the new list-of-triples
+                relations_data = data.get('relations', {})
+                if isinstance(relations_data, list):
+                    for item in relations_data:
+                        try:
+                            src, tgt, reasons = item
+                        except Exception:
+                            continue
+                        key = (src, tgt)
+                        if key in self.relations:
+                            for reason in reasons:
+                                if reason not in self.relations[key]:
+                                    self.relations[key].append(reason)
+                        else:
+                            self.relations[key] = list(reasons)
+                elif isinstance(relations_data, dict):
+                    for key, value in relations_data.items():
+                        # Key may already be a tuple (legacy pickle) or something else.
+                        if isinstance(key, (list, tuple)):
+                            k = tuple(key)
+                        else:
+                            k = key
+
+                        if k in self.relations:
+                            for reason in value:
+                                if reason not in self.relations[k]:
+                                    self.relations[k].append(reason)
+                        else:
+                            self.relations[k] = list(value)
 
                 self.entity_mapping.update(data.get('entity_mapping', {}))
                 if 'metadata' in data:
@@ -782,7 +813,24 @@ class KnowledgeGraph:
                 logger.info(f"Replacing existing graph with loaded graph...")
                 self.graph = loaded_graph
                 self.entities = data.get('entities', {})
-                self.relations = defaultdict(list, data.get('relations', {}))
+                # Reconstruct relations into defaultdict with tuple keys.
+                raw_rel = data.get('relations', {})
+                new_rel = defaultdict(list)
+                if isinstance(raw_rel, list):
+                    for item in raw_rel:
+                        try:
+                            src, tgt, reasons = item
+                        except Exception:
+                            continue
+                        new_rel[(src, tgt)] = list(reasons)
+                elif isinstance(raw_rel, dict):
+                    for key, value in raw_rel.items():
+                        if isinstance(key, (list, tuple)):
+                            k = tuple(key)
+                        else:
+                            k = key
+                        new_rel[k] = list(value)
+                self.relations = new_rel
                 self.entity_mapping = data.get('entity_mapping', {})
                 md = data.get('metadata', {})
                 self.metadata = {

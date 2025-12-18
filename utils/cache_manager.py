@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Optional, Any, Dict
 from contextlib import contextmanager
-from logger import setup_logger
+from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 

@@ -10,17 +10,22 @@ import pickle
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 from typing import Dict, List, Tuple, Optional, Mapping, Sequence, Any
-from ..utils.config import NLPConfig, CacheConfig
-from ..utils.logger import setup_logger
-from ..utils.translator import TextTranslator
-from provenance import Provenance, migrate_legacy_reasons
+try:
+    from ..utils.config import NLPConfig, CacheConfig
+    from ..utils.logger import setup_logger
+    from ..utils.translator import TextTranslator
+except:
+    from utils.config import NLPConfig, CacheConfig
+    from utils.logger import setup_logger
+    from utils.translator import TextTranslator
+from processor.provenance import Provenance, migrate_legacy_reasons
 import diskcache
 
 logger = setup_logger(__name__)
 
 # Import advanced NLP enhancements
 try:
-    from nlp_enhancements import (
+    from processor.nlp_enhancements import (
         CoreferenceResolver,
         EnhancedRelationExtractor,
         EntityLinker,
@@ -94,7 +99,7 @@ except ImportError as e:
 
 # Import relation classifier
 try:
-    from relation_classifier import RelationClassifier
+    from processor.relation_classifier import RelationClassifier
     RELATION_CLASSIFIER_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"Relation classifier not available: {e}")
@@ -884,7 +889,7 @@ class NLPProcessor:
         Returns:
             Dictionary mapping normalized entity text to entity label
         """
-        from node_cleaner import clean_node_name, is_valid_entity_text
+        from processor.node_cleaner import clean_node_name, is_valid_entity_text
         
         entities = {}
         for ent in doc.ents:

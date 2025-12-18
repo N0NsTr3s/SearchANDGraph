@@ -6,7 +6,10 @@ Maps natural language patterns to structured relation types like is_CEO_of, was_
 """
 import spacy
 from typing import Optional, List, Tuple, Set
-from ..utils.logger import setup_logger
+try:
+    from ..utils.logger import setup_logger
+except:
+    from utils.logger import setup_logger
 from spacy import tokens
 logger = setup_logger(__name__)
 

@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 import aiohttp
 import asyncio
 
-from logger import setup_logger
+from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
@@ -71,7 +71,7 @@ class DocumentExtractor:
 
         # Manifest for dedupe across crawler + web search downloads.
         try:
-            from download_manifest import DownloadManifest
+            from utils.download_manifest import DownloadManifest
 
             self._manifest = DownloadManifest(self.download_dir / "manifest.json")
         except Exception:
@@ -159,7 +159,7 @@ class DocumentExtractor:
                 logger.debug(f"Document already downloaded: {filepath}")
                 if self._manifest is not None:
                     try:
-                        from download_manifest import sha256_file
+                        from utils.download_manifest import sha256_file
 
                         self._manifest.upsert(url=url, content_hash=sha256_file(filepath), path=filepath)
                     except Exception:
@@ -177,7 +177,7 @@ class DocumentExtractor:
                         # Dedupe by content hash
                         if self._manifest is not None:
                             try:
-                                from download_manifest import sha256_bytes
+                                from utils.download_manifest import sha256_bytes
 
                                 digest = sha256_bytes(content)
                                 existing_by_hash = self._manifest.get_by_hash(digest)

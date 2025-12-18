@@ -8,8 +8,10 @@ import hashlib
 from typing import Optional, List, Dict, Tuple
 from pathlib import Path
 import diskcache
-from ..utils.logger import setup_logger
-
+try:
+    from ..utils.logger import setup_logger
+except:
+    from utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 

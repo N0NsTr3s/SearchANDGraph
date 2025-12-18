@@ -18,6 +18,21 @@ from ui.updates import UpdateDialog
 from ui.main_window import MainWindow
 
 
+# When running the script directly (python desktop_app.py) the module
+# package context is not set which can break relative imports used in
+# subpackages (e.g. `from ..utils.logger import ...`). Ensure the
+# project root is on sys.path and set __package__ so package-relative
+# imports inside submodules resolve as if the package name is
+# the directory name (SearchANDGraph).
+if __name__ == "__main__" and __package__ is None:
+    pkg_root = Path(__file__).resolve().parent
+    parent_dir = str(pkg_root.parent)
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
+    # Set package name to the folder name (matches earlier layout)
+    __package__ = pkg_root.name
+
+
 def main() -> None:
     _mutex_handle = hold_app_mutex()
 

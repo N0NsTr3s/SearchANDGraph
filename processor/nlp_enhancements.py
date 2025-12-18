@@ -8,15 +8,19 @@ import requests
 from typing import Dict, List, Tuple, Optional, Set
 from collections import defaultdict
 from requests.exceptions import RequestException, Timeout, ConnectionError
-from ..utils.logger import setup_logger
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from spacy.tokens import Span, Token, Doc
-from ..utils.cache_manager import CacheManager
-
+try:
+    from ..utils.cache_manager import CacheManager
+    from ..utils.logger import setup_logger
+except:
+    from utils.cache_manager import CacheManager
+    from utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 try:
-    from temporal_processor import TemporalProcessor
+    from processor.temporal_processor import TemporalProcessor
     TEMPORAL_AVAILABLE = True
 except ImportError:
     logger.warning("Temporal processor not available")
