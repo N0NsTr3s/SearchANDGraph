@@ -12,7 +12,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 import concurrent.futures
 
-from logger import setup_logger
+from utils.logger import setup_logger
 from urllib.parse import urlparse
 
 logger = setup_logger(__name__)
@@ -76,6 +76,7 @@ class CanonicalPipeline:
         # Thread pool for parallel NLP processing
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
         logger.info(f"Initialized pipeline with {max_workers} parallel workers")
+        self._executor_shutdown = False
         
         # Pipeline queues
         self.translation_queue: List[ContentItem] = []
@@ -364,6 +365,17 @@ class CanonicalPipeline:
         
         logger.info(f"NLP processed {processed_count}/{len(batch)} items in parallel")
         return processed_count
+
+    def shutdown(self, wait: bool = True):
+        """Gracefully shutdown the internal ThreadPoolExecutor."""
+        if getattr(self, 'executor', None) and not getattr(self, '_executor_shutdown', False):
+            try:
+                logger.info("Shutting down pipeline executor...")
+                self.executor.shutdown(wait=wait)
+            except Exception as e:
+                logger.warning(f"Error shutting down executor: {e}")
+            finally:
+                self._executor_shutdown = True
 
     async def _process_and_aggregate_site(self, site_items: List[ContentItem]) -> int:
         """

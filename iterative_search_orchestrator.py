@@ -5,14 +5,15 @@ Continuously discovers new keywords and entities from search results and graph d
 from typing import List, Dict, Set, Optional, Tuple, Any, TYPE_CHECKING
 from dataclasses import dataclass
 import asyncio
+import os
 from collections import Counter
 import re
 
-from advanced_search import SearchQuery, AdvancedSearchBuilder
-from logger import setup_logger
+from scraper.advanced_search import SearchQuery, AdvancedSearchBuilder
+from utils.logger import setup_logger
 
 if TYPE_CHECKING:
-    from crawler import WebCrawler
+    from scraper.crawler import WebCrawler
 
 logger = setup_logger(__name__)
 
@@ -69,6 +70,9 @@ class IterativeSearchOrchestrator:
         self.max_results_per_query = max_results_per_query
         self.min_relevance_score = min_relevance_score
         self.builder = AdvancedSearchBuilder()
+        # Concurrency control for parallel searches
+        self.max_concurrent_searches = int(os.environ.get('SAG_MAX_CONCURRENT_SEARCHES', '3'))
+        self._search_sem = asyncio.Semaphore(self.max_concurrent_searches)
         
         # Tracking
         self.iterations: List[SearchIteration] = []
@@ -272,11 +276,12 @@ class IterativeSearchOrchestrator:
             logger.info(f"Query {i}/{len(queries)}: {query_str}")
             
             try:
-                # Use the crawler's browser-based search
-                results = await self.crawler.search_google(
-                    query_str,
-                    max_results=self.max_results_per_query
-                )
+                # Use the crawler's browser-based search (throttled by semaphore)
+                async with self._search_sem:
+                    results = await self.crawler.search_google(
+                        query_str,
+                        max_results=self.max_results_per_query
+                    )
                 
                 # Score and filter results
                 scored = self._filter_urls_by_relevance(

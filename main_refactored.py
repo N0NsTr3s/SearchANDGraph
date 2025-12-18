@@ -10,14 +10,15 @@ from pathlib import Path
 import networkx as nx
 from typing import cast, Dict, Tuple, List, Any
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
-from config import AppConfig
-from crawler import WebCrawler
-from nlp_processor import NLPProcessor
-from graph_builder import KnowledgeGraph
-from visualizer import GraphVisualizer
-from source_discovery import MultiSourceDiscovery
-from logger import setup_logger
-from scan_manager import get_scan_paths
+from utils.config import AppConfig
+from scraper.crawler import WebCrawler
+from processor.nlp_processor import NLPProcessor
+from processor.graph_builder import KnowledgeGraph
+from vizualization.visualizer import GraphVisualizer
+from scraper.source_discovery import MultiSourceDiscovery
+from utils.logger import setup_logger
+from scraper.scan_manager import get_scan_paths
+from scraper.web_search import WebSearcher
 
 logger = setup_logger("main")
 
@@ -438,7 +439,7 @@ async def main(
         logger.info("Discovering URLs via web search...")
         logger.info("=" * 60)
         
-        from web_search import WebSearcher
+        
         # Store all downloads under the scan's single downloads directory
         search_download_dir = str(scan_paths['scan_dir'] / "downloads")
         Path(search_download_dir).mkdir(parents=True, exist_ok=True)
@@ -1372,7 +1373,7 @@ async def main(
             # Create interactive visualization if enabled
             if config.visualization.enable_interactive:
                 try:
-                    from interactive_viz import create_interactive_visualization
+                    from vizualization.interactive_viz import create_interactive_visualization
                     
                     logger.info("Creating interactive visualization...")
                     create_interactive_visualization(

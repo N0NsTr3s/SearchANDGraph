@@ -1,0 +1,104 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
+
+
+@dataclass(frozen=True)
+class ScanRequest:
+    query: str
+    max_pages: int
+    headless: bool
+    enable_web_search: bool
+    download_pdfs: bool
+    base_dir: str = "scans"
+    preferred_sources: tuple[str, ...] | None = None
+    blacklisted_sources: tuple[str, ...] | None = None
+    viz_max_nodes: Optional[int] = None
+    viz_min_edge_confidence: Optional[float] = None
+    viz_remove_isolated_nodes: Optional[bool] = None
+
+    enable_phase2: Optional[bool] = None
+    phase2_max_pages: Optional[int] = None
+    phase2_concurrent_tabs: Optional[int] = None
+
+    document_min_relevance: Optional[float] = None
+    downloads_prune_irrelevant: Optional[bool] = None
+    downloads_prune_mode: Optional[str] = None
+    web_search_max_pdf_downloads: Optional[int] = None
+    web_search_min_relevance: Optional[float] = None
+
+    nlp_min_confidence: Optional[float] = None
+    nlp_min_relation_confidence: Optional[float] = None
+
+
+@dataclass
+class UserSettings:
+    base_dir: str = "scans"
+    preferred_sources: list[str] | None = None  # type: ignore[assignment]
+    blacklisted_sources: list[str] | None = None  # type: ignore[assignment]
+    recent_files: list[str] = None  # type: ignore[assignment]
+    viz_max_nodes: Optional[int] = None
+    viz_min_edge_confidence: Optional[float] = None
+    viz_remove_isolated_nodes: Optional[bool] = None
+
+    enable_phase2: Optional[bool] = None
+    phase2_max_pages: Optional[int] = None
+    phase2_concurrent_tabs: Optional[int] = None
+
+    document_min_relevance: Optional[float] = None
+    downloads_prune_irrelevant: Optional[bool] = None
+    downloads_prune_mode: Optional[str] = None
+    web_search_max_pdf_downloads: Optional[int] = None
+    web_search_min_relevance: Optional[float] = None
+
+    nlp_min_confidence: Optional[float] = None
+    nlp_min_relation_confidence: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        if self.recent_files is None:
+            self.recent_files = []
+
+    @staticmethod
+    def from_dict(data: dict) -> "UserSettings":
+        return UserSettings(
+            base_dir=str(data.get("base_dir") or "scans"),
+            preferred_sources=(None if data.get("preferred_sources") is None else [str(s) for s in data.get("preferred_sources")]),
+            blacklisted_sources=(None if data.get("blacklisted_sources") is None else [str(s) for s in data.get("blacklisted_sources")]),
+            recent_files=[str(s) for s in (data.get("recent_files") or [])],
+            viz_max_nodes=data.get("viz_max_nodes"),
+            viz_min_edge_confidence=data.get("viz_min_edge_confidence"),
+            viz_remove_isolated_nodes=data.get("viz_remove_isolated_nodes"),
+            enable_phase2=data.get("enable_phase2"),
+            phase2_max_pages=data.get("phase2_max_pages"),
+            phase2_concurrent_tabs=data.get("phase2_concurrent_tabs"),
+            document_min_relevance=data.get("document_min_relevance"),
+            downloads_prune_irrelevant=data.get("downloads_prune_irrelevant"),
+            downloads_prune_mode=data.get("downloads_prune_mode"),
+            web_search_max_pdf_downloads=data.get("web_search_max_pdf_downloads"),
+            web_search_min_relevance=data.get("web_search_min_relevance"),
+            nlp_min_confidence=data.get("nlp_min_confidence"),
+            nlp_min_relation_confidence=data.get("nlp_min_relation_confidence"),
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "base_dir": self.base_dir,
+            "preferred_sources": None if self.preferred_sources is None else list(self.preferred_sources),
+            "blacklisted_sources": None if self.blacklisted_sources is None else list(self.blacklisted_sources),
+            "recent_files": list(self.recent_files or []),
+            "viz_max_nodes": self.viz_max_nodes,
+            "viz_min_edge_confidence": self.viz_min_edge_confidence,
+            "viz_remove_isolated_nodes": self.viz_remove_isolated_nodes,
+            "enable_phase2": self.enable_phase2,
+            "phase2_max_pages": self.phase2_max_pages,
+            "phase2_concurrent_tabs": self.phase2_concurrent_tabs,
+            "document_min_relevance": self.document_min_relevance,
+            "downloads_prune_irrelevant": self.downloads_prune_irrelevant,
+            "downloads_prune_mode": self.downloads_prune_mode,
+            "web_search_max_pdf_downloads": self.web_search_max_pdf_downloads,
+            "web_search_min_relevance": self.web_search_min_relevance,
+            "nlp_min_confidence": self.nlp_min_confidence,
+            "nlp_min_relation_confidence": self.nlp_min_relation_confidence,
+        }
