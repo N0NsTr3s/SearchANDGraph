@@ -39,7 +39,7 @@ def check_for_updates(timeout_s: float = 5.0) -> Optional[dict[str, Any]]:
             return None
 
         latest_clean = latest_tag.lstrip("v").strip()
-        if pkg_version.parse(latest_clean) > pkg_version.parse(CURRENT_VERSION):
+        if pkg_version.parse(latest_clean) != pkg_version.parse(CURRENT_VERSION):
             print(f"Update available: {CURRENT_VERSION} -> {latest_clean}")
             return data
     except Exception:

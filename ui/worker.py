@@ -25,7 +25,7 @@ class ScanWorker(QObject):
 
             # Local imports to avoid circular import / heavy startup cost
             from scraper.scan_manager import get_scan_paths
-            from main_refactored import main as run_main
+            from main import main as run_main
 
             scan_paths = get_scan_paths(
                 self._request.query,

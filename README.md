@@ -32,10 +32,10 @@ python -m spacy download en_core_web_lg
 ### 2) Run a scan (script)
 
 ```bash
-python main_refactored.py
+python main.py
 ```
 
-Note: `main_refactored.py` currently runs with defaults unless you modify the call to `main(...)` or the defaults in `config.py`.
+Note: `main.py` currently runs with defaults unless you modify the call to `main(...)` or the defaults in `config.py`.
 
 ### 3) Run the desktop UI (PyQt)
 
@@ -74,7 +74,7 @@ If these aren’t available, the pipeline will still run, but document/OCR/table
 
 ## Project Layout (high level)
 
-- `main_refactored.py`: main scan orchestration entry point
+- `main.py`: main scan orchestration entry point
 - `desktop_app.py`: PyQt desktop UI (runs scans and displays output)
 - `crawler.py`: browser-based crawler + extraction + URL discovery
 - `web_search.py`: search engine scraping + download helpers
