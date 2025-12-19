@@ -23,6 +23,9 @@ Output/
 SearchANDGraph/
 assets/
 tests/
+# Keep project-level `ui/assets` tracked (this repo uses a top-level `assets/` ignore)
+!ui/assets/
+!ui/assets/**
 # Logs / runtime artifacts
 logs/
 *.log

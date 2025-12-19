@@ -1,0 +1,32 @@
+/* Base layout rules applied regardless of Tailwind availability. These
+	make the reading panel constrained and keep text readable on large
+	viewports or when the QWebEngineView zoom changes. */
+ * { box-sizing: border-box; }
+.html, body { height: 100%; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; margin: 0; background: #ffffff; color: #222; display: flex; align-items: center; justify-content: center; }
+
+/* The container centers content and is constrained so it remains readable
+	on very wide viewports. It grows/shrinks with the viewport and remains
+	scrollable when content is taller than the viewport. */
+.container { width: min(1400px, 88%); margin: auto; padding: clamp(16px, 2.6vw, 32px); border-radius: 12px; display:flex; flex-direction:column; gap:16px; max-height: calc(100vh - 56px); overflow:auto; box-shadow: 0 8px 26px rgba(0,0,0,0.10); }
+
+h1 { margin: 0 0 12px 0; font-size: clamp(22px, 2.8vw, 34px); }
+ .step { display: none; padding: 12px 6px; }
+ .step.active { display: block; }
+ .nav { display:flex; align-items:center; justify-content:center; gap: 12px; margin-top:12px; }
+ .btn { background: #2b6fff; color: white; padding: 8px 12px; border: none; border-radius: 6px; cursor:pointer; }
+ .btn:disabled { opacity: 0.45; cursor: default; }
+ #progress { font-size: 14px; }
+ .footer { display:flex; gap:12px; margin-top:18px; align-items:center; }
+ .link { color:#2b6fff; text-decoration:none; }
+ .spacer { flex:1 }
+ @media (max-width:900px) { .container{padding:12px} }
+
+ /* Additional fallback rules (kept for compatibility) */
+ .tw-fallback * { box-sizing: border-box; }
+ .tw-fallback body { background: #ffffff; color: #222; }
+ .tw-fallback .container { background: rgba(255,255,255,0.0); }
+
+ /* Ensure large text blocks wrap and the reading panel remains usable */
+p, li { line-height: 1.5; font-size: clamp(14px, 1.4vw, 18px); }
+ pre, code { white-space: pre-wrap; word-break: break-word; }

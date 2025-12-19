@@ -143,6 +143,19 @@ class OptionsDialog(QDialog):
         )
         form.addRow("Web search min relevance", self.web_search_min_relevance_edit)
 
+        # Moved from main UI: default toggles for crawler behavior
+        self.headless_edit = QCheckBox("Headless browser")
+        self.headless_edit.setChecked(True if settings.headless is None else bool(settings.headless))
+        form.addRow("", self.headless_edit)
+
+        self.enable_web_search_edit = QCheckBox("Enable web search")
+        self.enable_web_search_edit.setChecked(True if settings.enable_web_search is None else bool(settings.enable_web_search))
+        form.addRow("", self.enable_web_search_edit)
+
+        self.download_pdfs_edit = QCheckBox("Download PDFs from web search")
+        self.download_pdfs_edit.setChecked(True if settings.download_pdfs is None else bool(settings.download_pdfs))
+        form.addRow("", self.download_pdfs_edit)
+
         self.nlp_min_confidence_edit = QLineEdit(
             "" if settings.nlp_min_confidence is None else str(settings.nlp_min_confidence)
         )
@@ -234,6 +247,9 @@ class OptionsDialog(QDialog):
         nlp_min_rel_conf_raw = (self.nlp_min_relation_confidence_edit.text() or "").strip()
         nlp_min_relation_confidence: Optional[float]
         nlp_min_relation_confidence = None if not nlp_min_rel_conf_raw else float(nlp_min_rel_conf_raw)
+        headless = bool(self.headless_edit.isChecked())
+        enable_web_search = bool(self.enable_web_search_edit.isChecked())
+        download_pdfs = bool(self.download_pdfs_edit.isChecked())
 
         return UserSettings(
             base_dir=base_dir,
@@ -252,4 +268,7 @@ class OptionsDialog(QDialog):
             web_search_min_relevance=web_search_min_relevance,
             nlp_min_confidence=nlp_min_confidence,
             nlp_min_relation_confidence=nlp_min_relation_confidence,
+            headless=headless,
+            enable_web_search=enable_web_search,
+            download_pdfs=download_pdfs,
         )

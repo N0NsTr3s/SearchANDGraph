@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 import sys
 from pathlib import Path
@@ -64,6 +63,12 @@ class MainWindow(QMainWindow):
         self._fit_timer.setSingleShot(True)
         self._fit_timer.timeout.connect(self._auto_fit_current_page)
 
+        # Timer to periodically check and clear logs (runs daily)
+        self._log_clear_timer = QTimer(self)
+        self._log_clear_timer.setInterval(24 * 60 * 60 * 1000)  # 24 hours
+        self._log_clear_timer.timeout.connect(self._maybe_clear_logs)
+        self._log_clear_timer.start()
+
         self._screen_connected = False
 
         self.query_input = QLineEdit()
@@ -76,14 +81,11 @@ class MainWindow(QMainWindow):
         self.max_pages.setRange(1, 5000)
         self.max_pages.setValue(10)
 
-        self.headless = QCheckBox("Headless browser")
-        self.headless.setChecked(True)
-
-        self.enable_web_search = QCheckBox("Enable web search")
-        self.enable_web_search.setChecked(True)
-
-        self.download_pdfs = QCheckBox("Download PDFs from web search")
-        self.download_pdfs.setChecked(True)
+        # The following options were moved to the Options dialog: headless, enable_web_search, download_pdfs
+        # Provide a lightweight control to toggle visibility of the logs panel.
+        self.show_logs_checkbox = QCheckBox("Show logs panel")
+        self.show_logs_checkbox.setChecked(False)
+        self.show_logs_checkbox.toggled.connect(lambda v: self._set_logs_visible(v))
 
         self.start_btn = QPushButton("Start")
         self.start_btn.clicked.connect(self._on_start)
@@ -114,7 +116,15 @@ class MainWindow(QMainWindow):
             True,
         )
         self.web_view.loadFinished.connect(self._on_web_load_finished)
-        self.web_view.setHtml("<html><body><h3>Run a scan to view the graph.</h3></body></html>")
+        # Try to load a bundled onboarding page if present, otherwise fall back to a simple message.
+        try:
+            onboarding_path = self._find_asset("onboarding.html")
+            if onboarding_path is not None:
+                self.web_view.load(QUrl.fromLocalFile(str(onboarding_path.resolve())))
+            else:
+                self.web_view.setHtml("<html><body><h3>Run a scan to view the graph.</h3></body></html>")
+        except Exception:
+            self.web_view.setHtml("<html><body><h3>Run a scan to view the graph.</h3></body></html>")
 
         self._preview_dir: Path | None = None
         self._preview_running = False
@@ -136,9 +146,7 @@ class MainWindow(QMainWindow):
         controls_layout.addWidget(self.start_url_input, 2)
         controls_layout.addWidget(QLabel("Max pages:"))
         controls_layout.addWidget(self.max_pages)
-        controls_layout.addWidget(self.headless)
-        controls_layout.addWidget(self.enable_web_search)
-        controls_layout.addWidget(self.download_pdfs)
+        controls_layout.addWidget(self.show_logs_checkbox)
         controls_layout.addWidget(self.start_btn)
         controls_layout.addWidget(QLabel("Scans:"))
         controls_layout.addWidget(self.scan_select, 1)
@@ -153,6 +161,16 @@ class MainWindow(QMainWindow):
         self.bottom_split.splitterMoved.connect(lambda *_: self._fit_timer.start(120))
         self.bottom_split.installEventFilter(self)
         self.web_view.installEventFilter(self)
+
+        # Initialize logs visibility according to the checkbox (hidden by default)
+        try:
+            self._set_logs_visible(self.show_logs_checkbox.isChecked())
+        except Exception:
+            # If something goes wrong, ensure logs are visible as fallback
+            self.log_view.setVisible(False)
+
+        # Run an initial check to clear old logs if needed
+        QTimer.singleShot(250, self._maybe_clear_logs)
 
         root = QWidget()
         root_layout = QVBoxLayout(root)
@@ -327,6 +345,71 @@ class MainWindow(QMainWindow):
     def _append_log(self, line: str) -> None:
         self.log_view.append(line)
 
+    def _set_logs_visible(self, visible: bool) -> None:
+        try:
+            self.log_view.setVisible(visible)
+            # Adjust splitter sizes when hiding/showing logs
+            if hasattr(self, 'bottom_split') and self.bottom_split is not None:
+                if visible:
+                    # ensure logs pane has reasonable size
+                    self.bottom_split.setSizes([320, max(600, self.width() - 320)])
+                else:
+                    # hide logs by giving it minimal size
+                    self.bottom_split.setSizes([0, max(800, self.width())])
+        except Exception:
+            pass
+
+    def _maybe_clear_logs(self) -> None:
+        """Clear UI logs and delete on-disk log files older than 7 days if needed.
+
+        This checks `self._settings.last_logs_cleared` and, if more than 7 days
+        have passed, clears the `log_view`, removes old files from the `logs/`
+        directory in the project root, updates the timestamp and saves settings.
+        """
+        try:
+            import time
+            from datetime import timedelta
+
+            now = int(time.time())
+            last = int(self._settings.last_logs_cleared or 0)
+            seven_days = 7 * 24 * 60 * 60
+            if now - last < seven_days:
+                return
+
+            # Clear the UI log view
+            try:
+                self.log_view.clear()
+                self._append_log(f"Logs auto-cleared at {time.ctime(now)}")
+            except Exception:
+                pass
+
+            # Remove on-disk logs older than 7 days (if a logs folder exists)
+            try:
+                logs_dir = Path(__file__).resolve().parent.parent / "logs"
+                if logs_dir.exists() and logs_dir.is_dir():
+                    cutoff = now - seven_days
+                    for p in logs_dir.iterdir():
+                        try:
+                            if not p.is_file():
+                                continue
+                            mtime = int(p.stat().st_mtime)
+                            if mtime < cutoff:
+                                p.unlink()
+                                self._append_log(f"Removed old log: {p.name}")
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+
+            # Update settings and persist
+            try:
+                self._settings.last_logs_cleared = now
+                self._save_settings()
+            except Exception:
+                pass
+        except Exception:
+            return
+
     def _set_status(self, text: str) -> None:
         self.status_label.setText(text)
 
@@ -366,9 +449,9 @@ class MainWindow(QMainWindow):
             query=query,
             start_url=start_url or None,
             max_pages=int(self.max_pages.value()),
-            headless=bool(self.headless.isChecked()),
-            enable_web_search=bool(self.enable_web_search.isChecked()),
-            download_pdfs=bool(self.download_pdfs.isChecked()),
+            headless=bool(self._settings.headless),
+            enable_web_search=bool(self._settings.enable_web_search),
+            download_pdfs=bool(self._settings.download_pdfs),
             base_dir=str(self._settings.base_dir or "scans"),
             preferred_sources=tuple(self._settings.preferred_sources or ()),
             blacklisted_sources=tuple(self._settings.blacklisted_sources or ()),
@@ -447,6 +530,31 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "Options", f"Failed to save settings: {e}")
 
+    def _find_asset(self, filename: str) -> Optional[Path]:
+        """Look for an asset HTML file in a few likely locations.
+
+        Search order:
+        - `ui/assets/{filename}`
+        - `ui/_internal/assets/{filename}`
+        - `<repo_root>/assets/{filename}`
+        - `<repo_root>/_internal/assets/{filename}`
+        Returns a Path if found, else None.
+        """
+        base = Path(__file__).resolve().parent
+        candidates = [
+            base / "assets" / filename,
+            base / "_internal" / "assets" / filename,
+            base.parent / "assets" / filename,
+            base.parent / "_internal" / "assets" / filename,
+        ]
+        for p in candidates:
+            try:
+                if p.exists():
+                    return p
+            except Exception:
+                continue
+        return None
+
     def _open_options(self) -> None:
         dlg = OptionsDialog(self, self._settings)
         if dlg.exec() != QDialog.DialogCode.Accepted:
@@ -484,11 +592,23 @@ class MainWindow(QMainWindow):
             self._add_recent_file(Path(html_path))
             self._refresh_scan_dropdown(select_path=Path(html_path))
         else:
-            self.web_view.setHtml(
-                "<html><body><h3>Scan finished, but no HTML graph was found.</h3></body></html>"
-            )
-            self._append_log("No HTML output found.")
-            self._refresh_scan_dropdown()
+            # Prefer a local, user-friendly troubleshooting page if it exists.
+            try:
+                no_graph_path = self._find_asset("no_graph.html")
+                if no_graph_path is not None:
+                    self.web_view.load(QUrl.fromLocalFile(str(no_graph_path.resolve())))
+                    self._append_log(f"Loaded fallback page: {no_graph_path}")
+                else:
+                    self.web_view.setHtml(
+                        "<html><body><h3>Scan finished, but no HTML graph was found.</h3></body></html>"
+                    )
+                self._refresh_scan_dropdown()
+            except Exception:
+                self.web_view.setHtml(
+                    "<html><body><h3>Scan finished, but no HTML graph was found.</h3></body></html>"
+                )
+                self._append_log("No HTML output found.")
+                self._refresh_scan_dropdown()
 
     def _on_failed(self, message: str) -> None:
         try:

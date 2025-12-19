@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>No graph found – SearchANDGraph</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@3.4.0/dist/tailwind.min.css" rel="stylesheet">
+  <style>
+    body {
+      margin: 0;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+      background: #0a0a0f;
+      color: #e0e0e0;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+
+    .graph-bg {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 0;
+      opacity: 0.15;
+    }
+
+    .wrap {
+      position: relative;
+      z-index: 1;
+      max-width: 85vw;
+      max-height: 85vh;
+      margin: 0;
+      padding: 40px;
+      background: rgba(15, 15, 25, 0.85);
+      backdrop-filter: blur(20px);
+      border-radius: 16px;
+      border: 1px solid rgba(138, 43, 226, 0.2);
+      box-shadow: 0 8px 32px rgba(138, 43, 226, 0.1);
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+
+    .wrap::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    .wrap::-webkit-scrollbar-track {
+      background: rgba(20, 20, 35, 0.5);
+      border-radius: 4px;
+    }
+
+    .wrap::-webkit-scrollbar-thumb {
+      background: rgba(138, 43, 226, 0.5);
+      border-radius: 4px;
+    }
+
+    .wrap::-webkit-scrollbar-thumb:hover {
+      background: rgba(138, 43, 226, 0.7);
+    }
+
+    h1 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      margin: 0 0 20px 0;
+      background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      letter-spacing: -0.02em;
+    }
+
+    p {
+      color: #b8b8c8;
+      line-height: 1.7;
+      margin-bottom: 30px;
+      font-size: 1.1rem;
+    }
+
+    .card {
+      background: rgba(20, 20, 35, 0.6);
+      border: 1px solid rgba(138, 43, 226, 0.15);
+      padding: 24px;
+      border-radius: 12px;
+      margin: 20px 0;
+      transition: all 0.3s ease;
+    }
+
+    .card:hover {
+      border-color: rgba(138, 43, 226, 0.4);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(138, 43, 226, 0.15);
+    }
+
+    .card h3 {
+      color: #a855f7;
+      margin: 0 0 16px 0;
+      font-size: 1.3rem;
+      font-weight: 600;
+    }
+
+    .card ul, .card ol {
+      margin: 0;
+      padding-left: 24px;
+      color: #9ca3af;
+    }
+
+    .card li {
+      margin: 10px 0;
+      line-height: 1.6;
+    }
+
+    .actions {
+      margin-top: 32px;
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      display: inline-block;
+      padding: 14px 28px;
+      background: linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%);
+      color: #fff;
+      border-radius: 8px;
+      text-decoration: none;
+      font-weight: 600;
+      transition: all 0.3s ease;
+      border: 1px solid rgba(138, 43, 226, 0.3);
+      box-shadow: 0 4px 12px rgba(138, 43, 226, 0.3);
+    }
+
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 20px rgba(138, 43, 226, 0.5);
+      background: linear-gradient(135deg, #9f7aea 0%, #7c3aed 100%);
+    }
+
+    .muted {
+      color: #6b7280;
+      margin-top: 32px;
+      font-size: 0.95rem;
+      font-style: italic;
+    }
+
+    .muted strong {
+      color: #a855f7;
+      font-weight: 600;
+    }
+
+    a {
+      color: #a855f7;
+      transition: color 0.2s ease;
+    }
+
+    a:hover {
+      color: #c084fc;
+    }
+
+    /* Fallback styles */
+    .tw-fallback .wrap {
+      background: #141423;
+      border: 1px solid #2d2d44;
+    }
+  </style>
+</head>
+<body>
+  <canvas class="graph-bg" id="graphCanvas"></canvas>
+  
+  <div class="wrap">
+    <h1>No HTML graph was found</h1>
+    <p>The scan completed but no HTML graph was generated, or the embedded resources required to render it were blocked by your environment.</p>
+
+    <div class="card">
+      <h3>Why this can happen</h3>
+      <ul>
+        <li>Network policies or a restrictive browser environment block external scripts or CDNs.</li>
+        <li>The scan produced references to remote resources that could not be loaded when viewing locally.</li>
+        <li>Anti-virus, proxy, or VPN behaviour interfered with some downloads.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>Recommended steps</h3>
+      <ol>
+        <li>Provide a <strong>Start URL</strong> to scope crawling to a specific site and reduce external dependencies.</li>
+        <li>Try running the scan again using a different network or a proxy/VPN.</li>
+        <li>Check the <a href="../../README.md">README</a> for troubleshooting tips.</li>
+      </ol>
+    </div>
+
+    <div class="actions">
+      <a class="btn" href="../../README.md">Open README</a>
+      <a class="btn" href="../assets/onboarding.html">Open Quick Guide</a>
+    </div>
+
+    <p class="muted">Tip: Use the <strong>Scans</strong> dropdown or 'Open output folder' to inspect raw files in the scan folder.</p>
+  </div>
+
+  <script>
+    // Animated graph background
+    const canvas = document.getElementById('graphCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    
+    window.addEventListener('resize', () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    });
+
+    const colors = [
+      '#8b5cf6', // purple
+      '#a855f7', // lighter purple
+      '#c084fc', // lavender
+      '#ec4899', // pink
+      '#6366f1', // indigo
+      '#7c3aed'  // violet
+    ];
+
+    const nodes = [];
+    const nodeCount = 150;
+    
+    for (let i = 0; i < nodeCount; i++) {
+      nodes.push({
+        x: Math.random() * canvas.width,
+        y: Math.random() * canvas.height,
+        vx: (Math.random() - 0.5) * 0.5,
+        vy: (Math.random() - 0.5) * 0.5,
+        radius: 2 + Math.random() * 3,
+        color: colors[Math.floor(Math.random() * colors.length)]
+      });
+    }
+
+    function animate() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      // Update and draw nodes
+      nodes.forEach(node => {
+        node.x += node.vx;
+        node.y += node.vy;
+        
+        if (node.x < 0 || node.x > canvas.width) node.vx *= -1;
+        if (node.y < 0 || node.y > canvas.height) node.vy *= -1;
+        
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
+        ctx.fillStyle = node.color;
+        ctx.fill();
+        
+        // Add glow effect
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = node.color;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      });
+      
+      // Draw connections between nearby nodes
+      nodes.forEach((node1, i) => {
+        nodes.slice(i + 1).forEach(node2 => {
+          const dx = node1.x - node2.x;
+          const dy = node1.y - node2.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+          
+          if (distance < 180) {
+            const opacity = 0.4 * (1 - distance / 180);
+            const gradient = ctx.createLinearGradient(node1.x, node1.y, node2.x, node2.y);
+            gradient.addColorStop(0, node1.color.replace(')', `, ${opacity})`).replace('rgb', 'rgba').replace('#', 'rgba('));
+            gradient.addColorStop(1, node2.color.replace(')', `, ${opacity})`).replace('rgb', 'rgba').replace('#', 'rgba('));
+            
+            ctx.beginPath();
+            ctx.moveTo(node1.x, node1.y);
+            ctx.lineTo(node2.x, node2.y);
+            ctx.strokeStyle = `rgba(139, 92, 246, ${opacity})`;
+            ctx.lineWidth = 1;
+            ctx.stroke();
+          }
+        });
+      });
+      
+      requestAnimationFrame(animate);
+    }
+    
+    animate();
+
+    // Tailwind fallback detection
+    (function(){
+      try {
+        const test = document.createElement('div');
+        test.className = 'tw-test hidden';
+        document.body.appendChild(test);
+        const hidden = window.getComputedStyle(test).display === 'none';
+        document.body.removeChild(test);
+        if (!hidden) {
+          document.body.classList.add('tw-fallback');
+        }
+      } catch (e) {
+        document.body.classList.add('tw-fallback');
+      }
+    })();
+  </script>
+</body>
+</html>

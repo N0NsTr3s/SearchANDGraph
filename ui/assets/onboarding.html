@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SearchANDGraph – Quick Start</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@3.4.0/dist/tailwind.min.css" rel="stylesheet">
+  <style>
+    body {
+      margin: 0;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+      background: #0a0a0f;
+      color: #e0e0e0;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+
+    .graph-bg {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 0;
+      opacity: 0.12;
+    }
+
+    .container {
+      position: relative;
+      z-index: 1;
+      max-width: 85vw;
+      max-height: 85vh;
+      margin: 0;
+      padding: 40px;
+      background: rgba(15, 15, 25, 0.85);
+      backdrop-filter: blur(20px);
+      border-radius: 16px;
+      border: 1px solid rgba(138, 43, 226, 0.2);
+      box-shadow: 0 8px 32px rgba(138, 43, 226, 0.1);
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+
+    .container::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    .container::-webkit-scrollbar-track {
+      background: rgba(20, 20, 35, 0.5);
+      border-radius: 4px;
+    }
+
+    .container::-webkit-scrollbar-thumb {
+      background: rgba(138, 43, 226, 0.5);
+      border-radius: 4px;
+    }
+
+    .container::-webkit-scrollbar-thumb:hover {
+      background: rgba(138, 43, 226, 0.7);
+    }
+
+    h1 {
+      font-size: 2.8rem;
+      font-weight: 700;
+      margin: 0 0 40px 0;
+      background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      letter-spacing: -0.02em;
+      text-align: center;
+    }
+
+    .step {
+      display: none;
+      padding: 32px 24px;
+      min-height: 320px;
+    }
+
+    .step.active {
+      display: block;
+      animation: fadeIn 0.4s ease-in;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .step h2 {
+      font-size: 2rem;
+      font-weight: 600;
+      margin: 0 0 24px 0;
+      color: #a855f7;
+    }
+
+    .step p {
+      color: #b8b8c8;
+      line-height: 1.8;
+      margin-bottom: 20px;
+      font-size: 1.1rem;
+    }
+
+    .step ul {
+      list-style: none;
+      padding: 0;
+      margin: 20px 0;
+    }
+
+    .step li {
+      color: #9ca3af;
+      padding: 12px 0 12px 32px;
+      position: relative;
+      line-height: 1.6;
+      font-size: 1.05rem;
+    }
+
+    .step li:before {
+      content: "→";
+      position: absolute;
+      left: 0;
+      color: #8b5cf6;
+      font-weight: bold;
+      font-size: 1.2rem;
+    }
+
+    .step em {
+      color: #a855f7;
+      font-style: normal;
+      font-weight: 600;
+    }
+
+    .step strong {
+      color: #c084fc;
+      font-weight: 600;
+    }
+
+    .nav {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+      margin-top: 48px;
+      padding-top: 32px;
+      border-top: 1px solid rgba(138, 43, 226, 0.2);
+    }
+
+    .btn {
+      background: linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%);
+      color: white;
+      padding: 14px 32px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 1rem;
+      transition: all 0.3s ease;
+      box-shadow: 0 4px 12px rgba(138, 43, 226, 0.3);
+      border: 1px solid rgba(138, 43, 226, 0.3);
+    }
+
+    .btn:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 20px rgba(138, 43, 226, 0.5);
+      background: linear-gradient(135deg, #9f7aea 0%, #7c3aed 100%);
+    }
+
+    .btn:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
+
+    #progress {
+      font-size: 1rem;
+      font-weight: 600;
+      color: #a855f7;
+      min-width: 100px;
+      text-align: center;
+    }
+
+    .footer {
+      display: flex;
+      gap: 16px;
+      margin-top: 32px;
+      align-items: center;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .link {
+      color: #8b5cf6;
+      text-decoration: none;
+      font-weight: 500;
+      transition: color 0.2s ease;
+      padding: 8px 16px;
+      border-radius: 6px;
+      border: 1px solid rgba(138, 43, 226, 0.2);
+    }
+
+    .link:hover {
+      color: #c084fc;
+      border-color: rgba(138, 43, 226, 0.4);
+      background: rgba(138, 43, 226, 0.1);
+    }
+
+    .spacer {
+      flex: 1;
+    }
+
+    @media (max-width: 768px) {
+      .container {
+        max-width: 94vw;
+        max-height: 90vh;
+        padding: 24px;
+      }
+      h1 {
+        font-size: 2rem;
+      }
+      .step h2 {
+        font-size: 1.5rem;
+      }
+    }
+
+    /* Fallback styles */
+    .tw-fallback .container {
+      background: #141423;
+      border: 1px solid #2d2d44;
+    }
+  </style>
+</head>
+<body>
+  <canvas class="graph-bg" id="graphCanvas"></canvas>
+  
+  <div class="container">
+    <h1>Welcome to SearchANDGraph</h1>
+    <div id="steps">
+      <section class="step active" data-step="0">
+        <h2>What this app does</h2>
+        <p>This application runs targeted web and document searches and builds a knowledge graph from discovered content.</p>
+        <ul>
+          <li>Run a scan with a query</li>
+          <li>View a generated interactive graph</li>
+          <li>Open documents linked as evidence</li>
+        </ul>
+      </section>
+
+      <section class="step" data-step="1">
+        <h2>Starting a scan</h2>
+        <p>Enter a concise query (example: <em>Nvidia</em>) and optionally a <strong>Start URL</strong> to focus crawling on a site.</p>
+        <p>If you don't provide a Start URL the web search may be broad and external network restrictions can block fetching resources.</p>
+      </section>
+
+      <section class="step" data-step="2">
+        <h2>Dealing with blocked content</h2>
+        <p>If the graph fails to render or the scan seems to run but no HTML output appears, common causes are:</p>
+        <ul>
+          <li>Your network or browser environment blocks remote resources (CDN or external scripts).</li>
+          <li>Search results returned external-only resources that were blocked from being embedded.</li>
+        </ul>
+        <p>Recommendations: provide a <strong>Start URL</strong>, try again using a <strong>proxy / VPN</strong>, or re-run the scan with different options.</p>
+      </section>
+
+      <section class="step" data-step="3">
+        <h2>Options & Next steps</h2>
+        <p>Open <strong>File → Options…</strong> to change the base folder, preferred sources, or enable/disable web search.</p>
+        <p>When a scan finishes successfully, use the <strong>Scans</strong> dropdown or the <strong>Open output folder</strong> button to inspect results.</p>
+      </section>
+
+      <section class="step" data-step="4">
+        <h2>Shortcuts</h2>
+        <ul>
+          <li>Keyboard: <strong>←</strong>/<strong>→</strong> to move between steps.</li>
+          <li>Use <strong>Start URL</strong> to improve focused crawls.</li>
+          <li>Prefer smaller max pages for quick tests.</li>
+        </ul>
+      </section>
+    </div>
+
+    <div class="nav">
+      <button id="prev" class="btn">◀ Previous</button>
+      <div id="progress">Step <span id="cur">1</span> / <span id="total">5</span></div>
+      <button id="next" class="btn">Next ▶</button>
+    </div>
+
+    <div class="footer">
+      <a href="../../README.md" class="link">Open README</a>
+      <span class="spacer"></span>
+      <a href="../assets/no_graph.html" class="link">Show troubleshooting page</a>
+    </div>
+  </div>
+
+  <script>
+    // Animated graph background
+    const canvas = document.getElementById('graphCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    
+    window.addEventListener('resize', () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    });
+
+    const colors = [
+      '#8b5cf6', // purple
+      '#a855f7', // lighter purple
+      '#c084fc', // lavender
+      '#ec4899', // pink
+      '#6366f1', // indigo
+      '#7c3aed'  // violet
+    ];
+
+    const nodes = [];
+    const nodeCount = 150;
+    
+    for (let i = 0; i < nodeCount; i++) {
+      nodes.push({
+        x: Math.random() * canvas.width,
+        y: Math.random() * canvas.height,
+        vx: (Math.random() - 0.5) * 0.4,
+        vy: (Math.random() - 0.5) * 0.4,
+        radius: 2 + Math.random() * 3,
+        color: colors[Math.floor(Math.random() * colors.length)]
+      });
+    }
+
+    function animate() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      nodes.forEach(node => {
+        node.x += node.vx;
+        node.y += node.vy;
+        
+        if (node.x < 0 || node.x > canvas.width) node.vx *= -1;
+        if (node.y < 0 || node.y > canvas.height) node.vy *= -1;
+        
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
+        ctx.fillStyle = node.color;
+        ctx.fill();
+        
+        // Add glow effect
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = node.color;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      });
+      
+      nodes.forEach((node1, i) => {
+        nodes.slice(i + 1).forEach(node2 => {
+          const dx = node1.x - node2.x;
+          const dy = node1.y - node2.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+          
+          if (distance < 180) {
+            const opacity = 0.4 * (1 - distance / 180);
+            
+            ctx.beginPath();
+            ctx.moveTo(node1.x, node1.y);
+            ctx.lineTo(node2.x, node2.y);
+            ctx.strokeStyle = `rgba(139, 92, 246, ${opacity})`;
+            ctx.lineWidth = 1;
+            ctx.stroke();
+          }
+        });
+      });
+      
+      requestAnimationFrame(animate);
+    }
+    
+    animate();
+
+    // Step navigation
+    const steps = Array.from(document.querySelectorAll('.step'));
+    const total = steps.length;
+    const curEl = document.getElementById('cur');
+    const totalEl = document.getElementById('total');
+    const nextBtn = document.getElementById('next');
+    const prevBtn = document.getElementById('prev');
+    let index = 0;
+
+    function show(i) {
+      steps.forEach((s, k) => s.classList.toggle('active', k === i));
+      index = i;
+      curEl.textContent = String(i + 1);
+      totalEl.textContent = String(total);
+      prevBtn.disabled = i <= 0;
+      nextBtn.textContent = (i >= total - 1) ? 'Finish' : 'Next ▶';
+    }
+
+    nextBtn.addEventListener('click', () => {
+      if (index < total - 1) show(index + 1);
+      else window.location.href = '../assets/no_graph.html';
+    });
+    
+    prevBtn.addEventListener('click', () => { 
+      if (index > 0) show(index - 1); 
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight') nextBtn.click();
+      else if (e.key === 'ArrowLeft') prevBtn.click();
+    });
+
+    show(0);
+
+    // Tailwind fallback detection
+    (function(){
+      try {
+        const test = document.createElement('div');
+        test.className = 'tw-test hidden';
+        document.body.appendChild(test);
+        const hidden = window.getComputedStyle(test).display === 'none';
+        document.body.removeChild(test);
+        if (!hidden) {
+          document.body.classList.add('tw-fallback');
+        }
+      } catch (e) {
+        document.body.classList.add('tw-fallback');
+      }
+    })();
+  </script>
+</body>
+</html>

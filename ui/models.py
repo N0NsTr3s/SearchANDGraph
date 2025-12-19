@@ -48,6 +48,13 @@ class UserSettings:
     viz_min_edge_confidence: Optional[float] = None
     viz_remove_isolated_nodes: Optional[bool] = None
 
+    # New persisted defaults moved to Options dialog
+    headless: bool = True
+    enable_web_search: bool = True
+    download_pdfs: bool = True
+    # Timestamp (epoch seconds) when logs were last cleared by the auto-clean task
+    last_logs_cleared: Optional[int] = None
+
     enable_phase2: Optional[bool] = None
     phase2_max_pages: Optional[int] = None
     phase2_concurrent_tabs: Optional[int] = None
@@ -92,6 +99,10 @@ class UserSettings:
             preview_interval_seconds=int(data.get("preview_interval_seconds", 2) or 2),
             # source_priority may be a mapping or None
             source_priority=(None if data.get("source_priority") is None else {str(k): int(v) for k, v in (data.get("source_priority") or {}).items()}),
+            headless=bool(data.get("headless", True)),
+            enable_web_search=bool(data.get("enable_web_search", True)),
+            download_pdfs=bool(data.get("download_pdfs", True)),
+            last_logs_cleared=(None if data.get("last_logs_cleared") is None else int(data.get("last_logs_cleared"))),
         )
 
     def to_dict(self) -> dict:
@@ -116,4 +127,8 @@ class UserSettings:
             "preview_enabled": bool(self.preview_enabled),
             "preview_interval_seconds": int(self.preview_interval_seconds or 2),
             "source_priority": None if self.source_priority is None else dict(self.source_priority),
+            "headless": bool(self.headless),
+            "enable_web_search": bool(self.enable_web_search),
+            "download_pdfs": bool(self.download_pdfs),
+            "last_logs_cleared": None if self.last_logs_cleared is None else int(self.last_logs_cleared),
         }
