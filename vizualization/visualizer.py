@@ -133,8 +133,20 @@ class GraphVisualizer:
         else:
             initial_ranges = {}
 
-        # Add node hover tool
-        self._add_node_hover(plot, prepared_graph, graph_renderer)
+        node_details = Div(
+            text=(
+                "<div style='padding: 10px 12px; color: #555; font-size: 0.9em; background-color: #ffffff; "
+                "border: 1px solid #dcdfe6; border-radius: 6px; max-height: 160px; overflow-y: auto;'>"
+                "Click a node to see details here."
+                "</div>"
+            ),
+            width=350,
+            sizing_mode="stretch_width",
+            margin=(0, 0, 10, 0)
+        )
+
+        # Add node interaction (hover + click)
+        self._add_node_interaction(plot, prepared_graph, graph_renderer, node_details)
         
         # Add edge interaction (hover and click with pinning)
         pinned_panel, documents_index = self._add_edge_interaction(plot, prepared_graph, graph_renderer)
@@ -175,18 +187,6 @@ class GraphVisualizer:
             width=350,
             sizing_mode="stretch_width",
             margin=(0, 0, 8, 0)
-        )
-
-        node_details = Div(
-            text=(
-                "<div style='padding: 10px 12px; color: #555; font-size: 0.9em; background-color: #ffffff; "
-                "border: 1px solid #dcdfe6; border-radius: 6px; max-height: 160px; overflow-y: auto;'>"
-                "Click a node to see details here."
-                "</div>"
-            ),
-            width=350,
-            sizing_mode="stretch_width",
-            margin=(0, 0, 10, 0)
         )
 
         clear_button = Button(label="Clear search", button_type="default", width=130)
@@ -1342,14 +1342,15 @@ class GraphVisualizer:
 
         return widths, confidences
     
-    def _add_node_hover(self, plot, graph, graph_renderer):
+    def _add_node_interaction(self, plot, graph, graph_renderer, node_details_div):
         """
-        Add hover tooltips for nodes.
+        Add hover tooltips and click interaction for nodes.
         
         Args:
             plot: Bokeh plot object
             graph: NetworkX graph
             graph_renderer: Bokeh graph renderer
+            node_details_div: Div element to update with node details
         """
         # Add node labels
         graph_renderer.node_renderer.data_source.data['label'] = [
@@ -1366,6 +1367,159 @@ class GraphVisualizer:
             renderers=[graph_renderer.node_renderer]
         )
         plot.add_tools(node_hover)
+
+        # Add click interaction
+        node_source = graph_renderer.node_renderer.data_source
+        edge_source = graph_renderer.edge_renderer.data_source
+        
+        # Callback for node selection
+        callback = CustomJS(
+            args=dict(
+                node_source=node_source,
+                edge_source=edge_source,
+                details_div=node_details_div,
+                graph_renderer=graph_renderer
+            ),
+            code="""
+                const selected_indices = node_source.selected.indices;
+                const nodeData = node_source.data;
+                const edgeData = edge_source.data;
+                
+                const baseNodeColors = nodeData['color_base'] || [];
+                const baseNodeSizes = nodeData['size_base'] || [];
+                const baseNodeAlphas = nodeData['alpha_base'] || [];
+                const nodeColors = nodeData['color'] || [];
+                const nodeSizes = nodeData['size'] || [];
+                const nodeAlphas = nodeData['alpha'] || [];
+                const nodeIds = nodeData['node_id'] || [];
+                const displayNames = nodeData['display_name'] || [];
+                const nodeLabels = nodeData['label'] || [];
+                const degrees = nodeData['degree'] || [];
+                
+                const baseEdgeColors = edgeData['edge_color_base'] || [];
+                const baseEdgeAlphas = edgeData['edge_alpha_base'] || [];
+                const edgeColors = edgeData['edge_color'] || [];
+                const edgeAlphas = edgeData['edge_alpha'] || [];
+                const startIds = edgeData['start_id'] || [];
+                const endIds = edgeData['end_id'] || [];
+                
+                // Reset function
+                function resetView() {
+                    for (let i = 0; i < nodeColors.length; i++) {
+                        nodeColors[i] = baseNodeColors[i] || nodeColors[i];
+                        nodeSizes[i] = baseNodeSizes[i] || nodeSizes[i];
+                        nodeAlphas[i] = baseNodeAlphas[i] || 0.95;
+                    }
+                    for (let j = 0; j < edgeColors.length; j++) {
+                        edgeColors[j] = baseEdgeColors[j] || '#8A9DBF';
+                        edgeAlphas[j] = baseEdgeAlphas[j] || 0.45;
+                    }
+                    details_div.text = "<div style='padding: 10px 12px; color: #555; font-size: 0.9em; background-color: #ffffff; border: 1px solid #dcdfe6; border-radius: 6px; max-height: 160px; overflow-y: auto;'>Click a node to see details here.</div>";
+                }
+
+                if (selected_indices.length === 0) {
+                    resetView();
+                    node_source.change.emit();
+                    edge_source.change.emit();
+                    return;
+                }
+                
+                const idx = selected_indices[0];
+                const clickedNodeId = nodeIds[idx];
+                const clickedDisplayName = displayNames[idx];
+                
+                // Find neighbors
+                const neighborIds = new Set();
+                const connectedEdgeIndices = new Set();
+                
+                for (let i = 0; i < startIds.length; i++) {
+                    if (startIds[i] === clickedNodeId) {
+                        neighborIds.add(endIds[i]);
+                        connectedEdgeIndices.add(i);
+                    } else if (endIds[i] === clickedNodeId) {
+                        neighborIds.add(startIds[i]);
+                        connectedEdgeIndices.add(i);
+                    }
+                }
+                
+                // Update Nodes
+                for (let i = 0; i < nodeIds.length; i++) {
+                    if (i === idx) {
+                        // Clicked node
+                        nodeColors[i] = '#f1c40f'; // Highlight color
+                        nodeSizes[i] = (baseNodeSizes[i] || nodeSizes[i]) * 1.25;
+                        nodeAlphas[i] = 1.0;
+                    } else if (neighborIds.has(nodeIds[i])) {
+                        // Neighbor node
+                        nodeColors[i] = baseNodeColors[i]; // Keep original color
+                        nodeSizes[i] = baseNodeSizes[i];
+                        nodeAlphas[i] = 1.0;
+                    } else {
+                        // Unrelated node
+                        nodeColors[i] = baseNodeColors[i];
+                        nodeSizes[i] = baseNodeSizes[i];
+                        nodeAlphas[i] = 0.1; // Dimmed
+                    }
+                }
+                
+                // Update Edges
+                for (let i = 0; i < startIds.length; i++) {
+                    if (connectedEdgeIndices.has(i)) {
+                        edgeColors[i] = '#555555'; // Darker for visibility
+                        edgeAlphas[i] = 1.0;
+                    } else {
+                        edgeColors[i] = baseEdgeColors[i];
+                        edgeAlphas[i] = 0.05; // Very dim
+                    }
+                }
+                
+                // Update Details Div
+                const label = nodeLabels[idx] || 'Unknown';
+                const degree = degrees[idx] || 0;
+                
+                let html = `<div style='padding: 10px 12px; background-color: #ffffff; border: 1px solid #dcdfe6; border-radius: 6px; max-height: 200px; overflow-y: auto;'>`;
+                html += `<h4 style='margin: 0 0 8px 0; color: #2c3e50;'>${clickedDisplayName}</h4>`;
+                html += `<div style='font-size: 0.9em; margin-bottom: 4px;'><strong>Type:</strong> <span style='background-color: #eee; padding: 2px 6px; border-radius: 4px;'>${label}</span></div>`;
+                html += `<div style='font-size: 0.9em; margin-bottom: 8px;'><strong>Connections:</strong> ${degree}</div>`;
+                
+                if (neighborIds.size > 0) {
+                    html += `<div style='font-size: 0.9em; color: #555; margin-bottom: 4px;'><strong>Directly connected to:</strong></div>`;
+                    html += `<ul style='margin: 0 0 0 18px; padding: 0; font-size: 0.85em; color: #333;'>`;
+                    
+                    // Collect neighbor names for display
+                    const neighbors = [];
+                    for(let i=0; i<nodeIds.length; i++) {
+                        if(neighborIds.has(nodeIds[i])) {
+                            neighbors.push(displayNames[i]);
+                        }
+                    }
+                    // Sort and limit
+                    neighbors.sort();
+                    const limit = 20;
+                    for(let i=0; i<Math.min(neighbors.length, limit); i++) {
+                        html += `<li>${neighbors[i]}</li>`;
+                    }
+                    if (neighbors.length > limit) {
+                        html += `<li><em>...and ${neighbors.length - limit} more</em></li>`;
+                    }
+                    html += `</ul>`;
+                } else {
+                    html += `<div style='font-size: 0.9em; color: #777; font-style: italic;'>No direct connections visible.</div>`;
+                }
+                
+                html += `</div>`;
+                details_div.text = html;
+                
+                node_source.change.emit();
+                edge_source.change.emit();
+            """
+        )
+        
+        node_source.selected.js_on_change('indices', callback)
+        
+        # Add TapTool for nodes
+        node_tap = TapTool(renderers=[graph_renderer.node_renderer])
+        plot.add_tools(node_tap)
     
     def _add_edge_interaction(self, plot, graph, graph_renderer):
         """

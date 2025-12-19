@@ -33,14 +33,14 @@ try:
         nlp_model = load_spacy_model()
         logger.info("Loaded spaCy model for keyword extraction")
     except:
-        logger.info("Loading spaCy model from installed packages")
+        logger.warning("Loading spaCy model from installed packages")
 
     try:
         import en_core_web_lg
         nlp_model = en_core_web_lg.load()
         logger.info("Loaded spaCy model for keyword extraction")
     except:
-        logger.info("Loading spaCy model using spacy.load()")
+        logger.warning("Loading spaCy model using spacy.load()")
 
     try:
         nlp_model = spacy.load("en_core_web_lg")
