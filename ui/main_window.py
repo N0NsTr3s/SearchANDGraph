@@ -519,6 +519,19 @@ class MainWindow(QMainWindow):
                 data = json.loads(path.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
                     return UserSettings.from_dict(data)
+            else:
+                # Create a default settings file if missing so users have a persisted config
+                try:
+                    default = UserSettings()
+                    try:
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                    except Exception:
+                        pass
+                    path.write_text(json.dumps(default.to_dict(), indent=2), encoding="utf-8")
+                    return default
+                except Exception:
+                    # Fall back to in-memory defaults if we cannot write
+                    return UserSettings()
         except Exception:
             pass
         return UserSettings()
@@ -526,6 +539,11 @@ class MainWindow(QMainWindow):
     def _save_settings(self) -> None:
         path = self._settings_path()
         try:
+            # Ensure parent directory exists (packaged app may run from an extracted temp path)
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
             path.write_text(json.dumps(self._settings.to_dict(), indent=2), encoding="utf-8")
         except Exception as e:
             QMessageBox.warning(self, "Options", f"Failed to save settings: {e}")
@@ -547,6 +565,11 @@ class MainWindow(QMainWindow):
             base.parent / "assets" / filename,
             base.parent / "_internal" / "assets" / filename,
         ]
+        # If running from a PyInstaller bundle, resources may be under _MEIPASS
+        meipass = getattr(sys, '_MEIPASS', None)
+        if meipass:
+            candidates.insert(0, Path(meipass) / filename)
+
         for p in candidates:
             try:
                 if p.exists():

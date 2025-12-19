@@ -229,8 +229,8 @@
       nodes.push({
         x: Math.random() * canvas.width,
         y: Math.random() * canvas.height,
-        vx: (Math.random() - 0.5) * 0.5,
-        vy: (Math.random() - 0.5) * 0.5,
+        vx: (Math.random() - 0.5) * 0.4,
+        vy: (Math.random() - 0.5) * 0.4,
         radius: 2 + Math.random() * 3,
         color: colors[Math.floor(Math.random() * colors.length)]
       });
@@ -239,7 +239,6 @@
     function animate() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       
-      // Update and draw nodes
       nodes.forEach(node => {
         node.x += node.vx;
         node.y += node.vy;
@@ -259,7 +258,6 @@
         ctx.shadowBlur = 0;
       });
       
-      // Draw connections between nearby nodes
       nodes.forEach((node1, i) => {
         nodes.slice(i + 1).forEach(node2 => {
           const dx = node1.x - node2.x;
@@ -268,9 +266,6 @@
           
           if (distance < 180) {
             const opacity = 0.4 * (1 - distance / 180);
-            const gradient = ctx.createLinearGradient(node1.x, node1.y, node2.x, node2.y);
-            gradient.addColorStop(0, node1.color.replace(')', `, ${opacity})`).replace('rgb', 'rgba').replace('#', 'rgba('));
-            gradient.addColorStop(1, node2.color.replace(')', `, ${opacity})`).replace('rgb', 'rgba').replace('#', 'rgba('));
             
             ctx.beginPath();
             ctx.moveTo(node1.x, node1.y);
