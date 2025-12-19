@@ -3,7 +3,7 @@
 This module is intentionally tiny so it can be imported very early at startup.
 """
 
-CURRENT_VERSION = "1.2.24"
+CURRENT_VERSION = "1.2.25"
 
 # GitHub repository used for update checks (GitHub Releases).
 REPO_OWNER = "N0NsTr3s"

@@ -8,7 +8,7 @@ import asyncio
 import os
 from collections import Counter
 import re
-
+import sys
 from scraper.advanced_search import SearchQuery, AdvancedSearchBuilder
 from utils.logger import setup_logger
 
@@ -17,10 +17,31 @@ if TYPE_CHECKING:
 
 logger = setup_logger(__name__)
 
+def load_spacy_model():
+    if getattr(sys, "frozen", False):
+        base_path = sys._MEIPASS
+    else:
+        base_path = os.path.dirname(__file__)
+
+    model_path = os.path.join(base_path, "en_core_web_lg")
+    return spacy.load(model_path)
 # Try to import spaCy for NLP-driven keyword extraction
 try:
     import spacy
     NLP_AVAILABLE = True
+    try:
+        nlp_model = load_spacy_model()
+        logger.info("Loaded spaCy model for keyword extraction")
+    except:
+        logger.info("Loading spaCy model from installed packages")
+
+    try:
+        import en_core_web_lg
+        nlp_model = en_core_web_lg.load()
+        logger.info("Loaded spaCy model for keyword extraction")
+    except:
+        logger.info("Loading spaCy model using spacy.load()")
+
     try:
         nlp_model = spacy.load("en_core_web_lg")
         logger.info("Loaded spaCy model for keyword extraction")
