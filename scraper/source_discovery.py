@@ -15,7 +15,13 @@ logger = setup_logger(__name__)
 class MultiSourceDiscovery:
     """Handles entity discovery across multiple sources."""
 
-    def __init__(self, sources: Optional[List[str]] = None, preferred: Optional[List[str]] = None, blacklisted: Optional[List[str]] = None):
+    def __init__(
+        self,
+        sources: Optional[List[str]] = None,
+        preferred: Optional[List[str]] = None,
+        blacklisted: Optional[List[str]] = None,
+        source_priority: Optional[Dict[str, int]] = None,
+    ):
         """
         Initialize multi-source discovery.
 
@@ -24,9 +30,23 @@ class MultiSourceDiscovery:
             preferred: Optional list of preferred source tokens (priority only)
             blacklisted: Optional list of blacklisted source tokens (deny)
         """
+        # Default source list (kept for backwards compatibility)
         self.sources = sources or ['wikipedia', 'wikidata', 'dbpedia']
         self.preferred_set = {s.strip().lower() for s in (preferred or []) if s and s.strip()}
         self.blacklist_set = {s.strip().lower() for s in (blacklisted or []) if s and s.strip()}
+
+        # Normalize provided source_priority mapping (keys lower-cased). If not provided
+        # we keep it as None which signals "do not prioritize" (preserve input order).
+        if source_priority and isinstance(source_priority, dict):
+            try:
+                self.source_priority = {str(k).strip().lower(): int(v) for k, v in source_priority.items() if k and str(k).strip()}
+                logger.info(f"Using custom source_priority for discovery: {list(self.source_priority.items())}")
+            except Exception:
+                self.source_priority = None
+                logger.warning("Invalid source_priority provided; ignoring and preserving default ordering")
+        else:
+            self.source_priority = None
+
         logger.info(f"Multi-source discovery enabled for: {', '.join(self.sources)}")
     
     def discover_urls_for_entity(self, entity: str, lang: str = 'en') -> Dict[str, List[str]]:
@@ -112,21 +132,19 @@ class MultiSourceDiscovery:
         Returns:
             Sorted list of (url, entity, source) tuples
         """
-        source_priority = {
-            'wikipedia': 1,
-            'wikidata': 2,
-            'dbpedia': 3,
-            'web': 4
-        }
-        
+        # If no source_priority mapping was provided, do not re-order results.
+        if not self.source_priority:
+            return urls_with_sources
+
         def key_fn(item: tuple[str, str, str]) -> float:
-            src = item[2]
-            base = source_priority.get(src, 999)
+            src_raw = item[2]
+            src = (src_raw or "").strip().lower()
+            base = self.source_priority.get(src, 999)
             # Preferred sources get slightly better priority (lower key)
             if src in self.preferred_set:
                 return base - 0.5
             return base
 
         sorted_urls = sorted(urls_with_sources, key=key_fn)
-        
+
         return sorted_urls

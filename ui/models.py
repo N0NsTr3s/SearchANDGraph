@@ -12,6 +12,7 @@ class ScanRequest:
     headless: bool
     enable_web_search: bool
     download_pdfs: bool
+    start_url: Optional[str] = None
     base_dir: str = "scans"
     preferred_sources: tuple[str, ...] | None = None
     blacklisted_sources: tuple[str, ...] | None = None
@@ -31,6 +32,9 @@ class ScanRequest:
 
     nlp_min_confidence: Optional[float] = None
     nlp_min_relation_confidence: Optional[float] = None
+    # Preview settings
+    preview_enabled: bool = False
+    preview_interval_seconds: int = 2
 
 
 @dataclass
@@ -38,6 +42,7 @@ class UserSettings:
     base_dir: str = "scans"
     preferred_sources: list[str] | None = None  # type: ignore[assignment]
     blacklisted_sources: list[str] | None = None  # type: ignore[assignment]
+    source_priority: dict[str, int] | None = None
     recent_files: list[str] = None  # type: ignore[assignment]
     viz_max_nodes: Optional[int] = None
     viz_min_edge_confidence: Optional[float] = None
@@ -55,6 +60,9 @@ class UserSettings:
 
     nlp_min_confidence: Optional[float] = None
     nlp_min_relation_confidence: Optional[float] = None
+
+    preview_enabled: bool = False
+    preview_interval_seconds: int = 2
 
     def __post_init__(self) -> None:
         if self.recent_files is None:
@@ -80,6 +88,10 @@ class UserSettings:
             web_search_min_relevance=data.get("web_search_min_relevance"),
             nlp_min_confidence=data.get("nlp_min_confidence"),
             nlp_min_relation_confidence=data.get("nlp_min_relation_confidence"),
+            preview_enabled=bool(data.get("preview_enabled", False)),
+            preview_interval_seconds=int(data.get("preview_interval_seconds", 2) or 2),
+            # source_priority may be a mapping or None
+            source_priority=(None if data.get("source_priority") is None else {str(k): int(v) for k, v in (data.get("source_priority") or {}).items()}),
         )
 
     def to_dict(self) -> dict:
@@ -101,4 +113,7 @@ class UserSettings:
             "web_search_min_relevance": self.web_search_min_relevance,
             "nlp_min_confidence": self.nlp_min_confidence,
             "nlp_min_relation_confidence": self.nlp_min_relation_confidence,
+            "preview_enabled": bool(self.preview_enabled),
+            "preview_interval_seconds": int(self.preview_interval_seconds or 2),
+            "source_priority": None if self.source_priority is None else dict(self.source_priority),
         }

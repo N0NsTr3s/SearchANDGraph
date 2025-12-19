@@ -35,7 +35,8 @@ class WebCrawler:
         self,
         config: CrawlerConfig,
         cache_config: Optional[CacheConfig] = None,
-        web_searcher: Optional['WebSearcher'] = None
+        web_searcher: Optional['WebSearcher'] = None,
+        nlp_processor: Optional[object] = None,
     ):
         """
         Initialize the web crawler.
@@ -55,6 +56,8 @@ class WebCrawler:
         self.entity_mention_count = {}  # Track how often entities are mentioned
         self.high_value_entities = set()  # Entities worth searching for
         self.web_searcher = web_searcher
+        # Optional NLP processor instance (implements ingest(text, source_url) -> dict)
+        self.nlp_processor = nlp_processor
         self._used_search_urls: set[str] = set()
         self._search_attempts_by_query: dict[str, int] = {}
         self._max_search_attempts_per_query = 3
@@ -64,6 +67,18 @@ class WebCrawler:
         self.preferred_sources_set: set[str] = set()
         self.blacklisted_sources_set: set[str] = set()
         self._preferred_boost: float = 1.5  # multiply relevance for preferred sources
+
+        # UI preview (desktop app): save per-tab screenshots to a directory, if configured.
+        self._ui_preview_dir: Path | None = None
+        try:
+            raw = getattr(self.config, 'ui_preview_dir', None)
+            if raw:
+                self._ui_preview_dir = Path(str(raw))
+                self._ui_preview_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            self._ui_preview_dir = None
+        self._ui_preview_counter: int = 0
+        self._ui_preview_skipped_first: bool = False
 
         # Try to read lists from config if present (backwards compatible)
         prefer = getattr(self.config, 'preferred_sources', None) or getattr(self.config, 'sources', None)
@@ -92,6 +107,37 @@ class WebCrawler:
         else:
             self.cache = None
             logger.info("Disk cache disabled")
+
+    async def _send_to_processor(self, text: str, source_url: str | None = None) -> None:
+        """
+        Best-effort: send extracted content to the NLP processor in a thread
+        and update the crawler's discovered entities/relationships with the
+        results. This method swallows exceptions to avoid breaking crawling.
+        """
+        if not self.nlp_processor or not text:
+            return
+
+        try:
+            result = await asyncio.to_thread(self.nlp_processor.ingest, text, source_url)
+            if not result:
+                return
+
+            ents = result.get('entities') if isinstance(result, dict) else None
+            if ents:
+                try:
+                    # Add discovered entities to influence crawling
+                    self.add_entities(ents, mark_as_query=False)
+                except Exception:
+                    logger.debug("Failed to add entities from NLP processor")
+
+            rels = result.get('relations') if isinstance(result, dict) else None
+            if rels and isinstance(rels, dict):
+                try:
+                    self.add_relationships(rels)
+                except Exception:
+                    logger.debug("Failed to add relationships from NLP processor")
+        except Exception as e:
+            logger.debug(f"Processor ingest error: {e}")
 
     @staticmethod
     def _normalize_source_token(token: str) -> str:
@@ -179,6 +225,28 @@ class WebCrawler:
             if token == self._get_source_tag_for_url(url):
                 return True
         return False
+
+    async def _maybe_save_ui_preview(self, tab: 'uc.Tab') -> None:
+        """Save a lightweight screenshot for the desktop UI preview carousel.
+
+        The UI watches the preview directory and deletes images immediately after
+        loading them, keeping disk usage near zero.
+        """
+        if self._ui_preview_dir is None:
+            return
+
+        # Skip the first tab (per UX request).
+        if not self._ui_preview_skipped_first:
+            self._ui_preview_skipped_first = True
+            return
+
+        try:
+            self._ui_preview_counter += 1
+            out = self._ui_preview_dir / f"tab_{self._ui_preview_counter:06d}.jpg"
+            # Viewport screenshot is enough and faster.
+            await tab.save_screenshot(str(out), format="jpeg", full_page=False)
+        except Exception:
+            return
     async def start(self):
         """Start the browser instance."""
         logger.info("Starting browser...")
@@ -1871,6 +1939,8 @@ class WebCrawler:
             await self._remove_persistent_overlays(tab)
             await asyncio.sleep(0.3)  # Brief pause after overlay removal
 
+            await self._maybe_save_ui_preview(tab)
+
             html_content = await tab.get_content()
             try:
                 page_title = await tab.get_title()  # type: ignore[attr-defined]
@@ -2043,6 +2113,12 @@ class WebCrawler:
                 logger.debug(f"  Found {len(query_exact_links)} exact matches, {len(related_links)} contextually related for {url}")
                 
                 result['success'] = True
+                # If relevant, send text to NLP processor to extract entities/relations
+                if bool(result.get('is_relevant')):
+                    try:
+                        await self._send_to_processor(combined_text, url)
+                    except Exception:
+                        logger.debug("Background NLP processing raised an exception")
             else:
                 logger.warning(f"No content extracted from {url}")
                 result['error'] = "No content extracted"
@@ -2239,6 +2315,11 @@ class WebCrawler:
                 result['content'] = text
                 result['is_relevant'] = True
                 result['relevance_score'] = relevance_score
+                # Send document text to NLP processor for extraction
+                try:
+                    await self._send_to_processor(text, url)
+                except Exception:
+                    logger.debug("Document NLP processing failed")
             else:
                 logger.info(f"  Document not relevant (score: {relevance_score:.2f})")
                 # Optionally prune irrelevant documents (move/delete).
@@ -2420,6 +2501,8 @@ class WebCrawler:
             # Remove any persistent overlays that might still be blocking content
             await self._remove_persistent_overlays(tab)
             await asyncio.sleep(0.3)  # Brief pause after overlay removal
+
+            await self._maybe_save_ui_preview(tab)
 
             html_content = await tab.get_content()
             

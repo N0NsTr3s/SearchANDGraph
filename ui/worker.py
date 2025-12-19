@@ -10,6 +10,7 @@ from ui.logging import _install_qt_log_handler
 class ScanWorker(QObject):
     log = pyqtSignal(str)
     status = pyqtSignal(str)
+    started = pyqtSignal(str)  # scan_dir
     finished = pyqtSignal(str, str)  # scan_dir, html_path
     failed = pyqtSignal(str)
 
@@ -22,7 +23,6 @@ class ScanWorker(QObject):
             _install_qt_log_handler(lambda line: self.log.emit(line))
 
             self.status.emit("Running scan...")
-
             # Local imports to avoid circular import / heavy startup cost
             from scraper.scan_manager import get_scan_paths
             from main import main as run_main
@@ -33,12 +33,22 @@ class ScanWorker(QObject):
                 add_timestamp=False,
             )
 
+            # Notify listeners that the scan is starting (with scan_dir)
+            try:
+                self.started.emit(str(scan_paths["scan_dir"].resolve()))
+            except Exception:
+                pass
+
             asyncio.run(
                 run_main(
                     query=self._request.query,
+                    start_url=getattr(self._request, "start_url", None),
                     max_pages=self._request.max_pages,
                     add_timestamp=False,
                     base_dir=self._request.base_dir,
+                    ui_preview_dir=str((scan_paths["scan_dir"] / "_ui_previews").resolve())
+                    if getattr(self._request, "preview_enabled", False)
+                    else None,
                     browser_headless=self._request.headless,
                     enable_web_search=self._request.enable_web_search,
                     web_search_download_pdfs=self._request.download_pdfs,

@@ -545,6 +545,33 @@ class NLPProcessor:
         
         logger.debug(f"Extracted {len(entities)} entities and {len(relations)} relations")
         return entities, relations, entity_metadata
+
+    def ingest(self, text: str, source_url: Optional[str] = None, skip_translation: bool = False) -> Dict[str, Any]:
+        """
+        Convenience ingest method for external callers (crawler, document processor).
+
+        Runs the full extraction pipeline and returns a dict with extracted
+        entities (list) and relations (mapping). This method is synchronous
+        and may be executed inside a thread via `asyncio.to_thread` by callers.
+
+        Args:
+            text: Text to process
+            source_url: Optional URL where the text came from
+            skip_translation: If True, skip translation step
+
+        Returns:
+            Dict with keys: 'entities' -> list[str], 'relations' -> dict, 'metadata' -> dict
+        """
+        try:
+            entities, relations, metadata = self.extract_entities_and_relations(text, source_url, skip_translation)
+            return {
+                'entities': list(entities.keys()),
+                'relations': relations,
+                'metadata': metadata
+            }
+        except Exception as e:
+            logger.error(f"NLP ingest failed for {source_url or '<in-memory>'}: {e}")
+            return {'entities': [], 'relations': {}, 'metadata': {}}
     
     def process_pages_parallel(
         self,

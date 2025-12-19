@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Dict
 
 @dataclass
 class NLPConfig:
@@ -79,6 +79,9 @@ class CrawlerConfig:
     downloads_prune_irrelevant: bool = True  # Move/delete irrelevant downloaded documents
     downloads_prune_mode: str = "move"  # "move" or "delete"
     downloads_irrelevant_dir: str = "_irrelevant"  # Folder under downloads/ for pruned docs
+    # Optional mapping of source token -> integer priority (lower is better).
+    # If None, no prioritization will be applied and original ordering is preserved.
+    source_priority: Optional[Dict[str, int]] = None
     
     
 

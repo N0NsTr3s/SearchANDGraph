@@ -19,7 +19,7 @@ from scraper.source_discovery import MultiSourceDiscovery
 from utils.logger import setup_logger
 from scraper.scan_manager import get_scan_paths
 from scraper.web_search import WebSearcher
-
+import tempfile
 logger = setup_logger("main")
 
 
@@ -234,6 +234,7 @@ async def main(
     web_search_min_relevance: float | None = None,
     nlp_min_confidence: float | None = None,
     nlp_min_relation_confidence: float | None = None,
+    ui_preview_dir: str | None = None,
 ):
     """Run a full scan and build visualizations.
 
@@ -291,6 +292,13 @@ async def main(
     if web_search_min_relevance is not None:
         config.crawler.web_search_min_relevance = web_search_min_relevance
 
+    # UI preview directory (used to save per-tab screenshots for the desktop app)
+    if ui_preview_dir is not None:
+        try:
+            config.crawler.ui_preview_dir = str(ui_preview_dir)
+        except Exception:
+            pass
+
     # Optional config overrides driven by the desktop UI
     # Only apply merging when the UI provided at least one meaningful (non-empty)
     # preferred or blacklisted source. Empty lists/strings mean "no override".
@@ -342,6 +350,25 @@ async def main(
     config.graph.graph_file = str(scan_paths['graph_file'])
     config.visualization.output_file = str(scan_paths['viz_file'])
     config.visualization.interactive_file = str(scan_paths['interactive_viz_file'])
+
+    # Ensure preview dir is inside scan folder if not explicitly provided.
+    try:
+        preview_dir = Path(str(getattr(config.crawler, 'ui_preview_dir', '') or '')).expanduser()
+    except Exception:
+        preview_dir = Path()
+
+    if not str(preview_dir):
+        preview_dir = Path(scan_paths['scan_dir']) / "_ui_previews"
+
+    # Best-effort: clear any previous run screenshots.
+    try:
+        import shutil
+
+        shutil.rmtree(preview_dir, ignore_errors=True)
+        preview_dir.mkdir(parents=True, exist_ok=True)
+        config.crawler.ui_preview_dir = str(preview_dir)
+    except Exception:
+        pass
     
     logger.info("=" * 60)
     logger.info("Starting Knowledge Graph Extractor")
@@ -380,8 +407,9 @@ async def main(
         if blacklist_clean:
             config.crawler.blacklisted_sources = blacklist_clean
 
-    crawler = WebCrawler(config.crawler, config.cache)
+    # Initialize NLP processor first so it can be passed into the crawler
     nlp_processor = NLPProcessor(config.nlp, config.cache)
+    crawler = WebCrawler(config.crawler, config.cache, web_searcher=None, nlp_processor=nlp_processor)
     
     # Initialize KnowledgeGraph with entity disambiguation if enabled
     if config.graph.enable_disambiguation:
@@ -401,7 +429,8 @@ async def main(
         source_discovery = MultiSourceDiscovery(
             config.crawler.sources,
             preferred=getattr(config.crawler, 'preferred_sources', None),
-            blacklisted=getattr(config.crawler, 'blacklisted_sources', None)
+            blacklisted=getattr(config.crawler, 'blacklisted_sources', None),
+            source_priority=getattr(config.crawler, 'source_priority', None)
         )
     
     # Try to load existing graph if incremental building is enabled
@@ -998,9 +1027,9 @@ async def main(
                                 try:
                                     entity_text = entity.get('text', entity) if isinstance(entity, dict) else entity
                                     entity_encoded = entity_text.replace(' ', '_')
-                                    # Only try Romanian Wikipedia first (more relevant for Romanian queries)
+                                    # Only try English Wikipedia first (more relevant for English queries)
                                     candidate_urls = [
-                                        f"https://ro.wikipedia.org/wiki/{entity_encoded}",
+                                        f"https://en.wikipedia.org/wiki/{entity_encoded}",
                                     ]
                                     
                                     for url in candidate_urls:

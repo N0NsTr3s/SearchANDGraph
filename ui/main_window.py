@@ -37,6 +37,7 @@ from ui.models import ScanRequest, UserSettings
 from ui.options import OptionsDialog
 from ui.web import ExternalLinksPage
 from ui.worker import ScanWorker
+from ui.screenshot_carousel import ScreenshotCarousel
 
 
 class MainWindow(QMainWindow):
@@ -67,6 +68,9 @@ class MainWindow(QMainWindow):
 
         self.query_input = QLineEdit()
         self.query_input.setPlaceholderText("Enter a query (e.g., Nvidia)")
+
+        self.start_url_input = QLineEdit()
+        self.start_url_input.setPlaceholderText("Optional start URL (e.g., https://example.com)")
 
         self.max_pages = QSpinBox()
         self.max_pages.setRange(1, 5000)
@@ -112,10 +116,24 @@ class MainWindow(QMainWindow):
         self.web_view.loadFinished.connect(self._on_web_load_finished)
         self.web_view.setHtml("<html><body><h3>Run a scan to view the graph.</h3></body></html>")
 
+        self._preview_dir: Path | None = None
+        self._preview_running = False
+        self.preview_carousel = ScreenshotCarousel()
+        self.preview_carousel.hide()
+
+        right_pane = QWidget()
+        right_layout = QVBoxLayout(right_pane)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(6)
+        right_layout.addWidget(self.preview_carousel, 0)
+        right_layout.addWidget(self.web_view, 1)
+
         controls = QWidget()
         controls_layout = QHBoxLayout(controls)
         controls_layout.addWidget(QLabel("Query:"))
         controls_layout.addWidget(self.query_input, 2)
+        controls_layout.addWidget(QLabel("Start URL:"))
+        controls_layout.addWidget(self.start_url_input, 2)
         controls_layout.addWidget(QLabel("Max pages:"))
         controls_layout.addWidget(self.max_pages)
         controls_layout.addWidget(self.headless)
@@ -128,7 +146,7 @@ class MainWindow(QMainWindow):
 
         self.bottom_split = QSplitter(Qt.Orientation.Horizontal)
         self.bottom_split.addWidget(self.log_view)
-        self.bottom_split.addWidget(self.web_view)
+        self.bottom_split.addWidget(right_pane)
         self.bottom_split.setStretchFactor(0, 1)
         self.bottom_split.setStretchFactor(1, 5)
         self.bottom_split.setSizes([320, 880])
@@ -318,6 +336,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing query", "Please enter a query.")
             return
 
+        start_url = self.start_url_input.text().strip()
+
         if self._thread is not None:
             QMessageBox.information(self, "Scan running", "A scan is already running.")
             return
@@ -326,8 +346,25 @@ class MainWindow(QMainWindow):
         self.open_folder_btn.setEnabled(False)
         self._last_scan_dir = None
 
+        # Prepare preview directory under the scan folder and clear stale files.
+        try:
+            from scraper.scan_manager import get_scan_paths
+            import shutil
+
+            scan_paths = get_scan_paths(
+                query=query,
+                base_dir=str(self._settings.base_dir or "scans"),
+                add_timestamp=False,
+            )
+            self._preview_dir = Path(scan_paths["scan_dir"]) / "_ui_previews"
+            shutil.rmtree(self._preview_dir, ignore_errors=True)
+            self._preview_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            self._preview_dir = None
+
         request = ScanRequest(
             query=query,
+            start_url=start_url or None,
             max_pages=int(self.max_pages.value()),
             headless=bool(self.headless.isChecked()),
             enable_web_search=bool(self.enable_web_search.isChecked()),
@@ -348,6 +385,8 @@ class MainWindow(QMainWindow):
             web_search_min_relevance=self._settings.web_search_min_relevance,
             nlp_min_confidence=self._settings.nlp_min_confidence,
             nlp_min_relation_confidence=self._settings.nlp_min_relation_confidence,
+            preview_enabled=True,
+            preview_interval_seconds=2,
         )
 
         self._set_status("Queued")
@@ -359,6 +398,7 @@ class MainWindow(QMainWindow):
         self._thread.started.connect(self._worker.run)
         self._worker.log.connect(self._append_log)
         self._worker.status.connect(self._set_status)
+        self._worker.started.connect(self._on_scan_started)
         self._worker.finished.connect(self._on_finished)
         self._worker.failed.connect(self._on_failed)
 
@@ -366,6 +406,17 @@ class MainWindow(QMainWindow):
         self._worker.failed.connect(self._cleanup_thread)
 
         self._thread.start()
+
+    def _on_scan_started(self, scan_dir: str) -> None:
+        # Show previews while the scan is running.
+        try:
+            self._preview_running = True
+            self._preview_dir = Path(scan_dir) / "_ui_previews"
+            self.preview_carousel.show()
+            self.web_view.hide()
+            self.preview_carousel.start(self._preview_dir, rotate_seconds=2)
+        except Exception:
+            pass
 
     def _cleanup_thread(self) -> None:
         if self._thread is None:
@@ -413,6 +464,15 @@ class MainWindow(QMainWindow):
         self._append_log("Options saved")
 
     def _on_finished(self, scan_dir: str, html_path: str) -> None:
+        try:
+            if self._preview_running:
+                self._preview_running = False
+                self.preview_carousel.stop()
+                self.preview_carousel.hide()
+                self.web_view.show()
+        except Exception:
+            pass
+
         self._last_scan_dir = Path(scan_dir)
         self.open_folder_btn.setEnabled(True)
 
@@ -431,6 +491,14 @@ class MainWindow(QMainWindow):
             self._refresh_scan_dropdown()
 
     def _on_failed(self, message: str) -> None:
+        try:
+            if self._preview_running:
+                self._preview_running = False
+                self.preview_carousel.stop()
+                self.preview_carousel.hide()
+                self.web_view.show()
+        except Exception:
+            pass
         QMessageBox.critical(self, "Scan failed", message)
 
     def _on_open_folder(self) -> None:
