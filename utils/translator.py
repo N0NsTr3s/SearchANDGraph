@@ -1,7 +1,35 @@
 """
 Translation module for converting text to English for better entity detection.
 """
-import translators as ts
+import os
+import locale
+
+# Lazy import of the external `translators` package. We set the
+# environment variable `translators_default_region` before importing
+# to avoid the package doing an external region autodiscovery (it
+# may call out to httpbin.org which fails when offline).
+ts = None
+
+def _ensure_translators(region: str | None = None):
+    """Ensure the `translators` package is imported and configured.
+
+    If `region` is provided, set the environment before import so the
+    package does not perform network-based region detection.
+    """
+    global ts
+    if ts is not None:
+        return ts
+
+    # Set default region if given, otherwise fall back to existing env or EN
+    if region:
+        os.environ.setdefault("translators_default_region", region)
+    else:
+        os.environ.setdefault("translators_default_region", os.environ.get("translators_default_region", "EN"))
+
+    import translators as translators_module
+
+    ts = translators_module
+    return ts
 from typing import Optional, List
 from pathlib import Path
 import diskcache
@@ -22,7 +50,14 @@ class TextTranslator:
     # Maximum characters per translation request to avoid API limits
     MAX_CHUNK_SIZE = 2500  # Reduced for better reliability (was 4000)
     
-    def __init__(self, target_language: str = "en", provider: str = "Deepl", cache_config: Optional[CacheConfig] = None):
+    def __init__(
+        self,
+        target_language: str = "en",
+        provider: str = "Deepl",
+        cache_config: Optional[CacheConfig] = None,
+        region: Optional[str] = None,
+        detect_region: bool = True,
+    ):
         """
         Initialize the translator.
         
@@ -34,6 +69,18 @@ class TextTranslator:
         self.target_language = target_language
         self.provider = provider
         self.cache_config = cache_config or CacheConfig()
+
+        # Determine translators region preference
+        if region:
+            self.region = str(region).upper()
+        elif detect_region:
+            self.region = self._detect_region()
+        else:
+            self.region = os.environ.setdefault("translators_default_region", "EN").upper()
+
+        # Ensure env var is set and import the translators package lazily
+        os.environ.setdefault("translators_default_region", self.region)
+        _ensure_translators(self.region)
         
         # Initialize SQLite cache manager
         if self.cache_config.enabled:
@@ -52,6 +99,42 @@ class TextTranslator:
         self.failed_translations = 0
         
         logger.info(f"Initialized translator: provider={provider}, target={target_language}")
+
+    def _detect_region(self) -> str:
+        """Attempt to detect a sensible region code from the system locale.
+
+        This is a lightweight, offline heuristic — it does not make network
+        calls. It returns a short region code like 'EN', 'RO', 'CN', etc.
+        """
+        try:
+            loc = locale.getdefaultlocale()[0] or locale.getlocale()[0]
+        except Exception:
+            loc = None
+
+        if not loc:
+            return "EN"
+
+        # Typical values: 'en_US', 'ro_RO', 'zh_CN'
+        parts = str(loc).split("_")
+        if len(parts) >= 2:
+            country = parts[1].upper()
+        else:
+            # try split by '-' (e.g. en-US)
+            parts2 = str(loc).split("-")
+            country = parts2[1].upper() if len(parts2) >= 2 else parts2[0].upper()
+
+        mapping = {
+            "US": "EN",
+            "GB": "EN",
+            "UK": "EN",
+            "RO": "RO",
+            "CN": "CN",
+            "DE": "DE",
+            "FR": "FR",
+            "RU": "RU",
+        }
+
+        return mapping.get(country, "EN")
     
     def _split_text_into_chunks(self, text: str, max_size: int = MAX_CHUNK_SIZE) -> List[str]:
         """
@@ -253,11 +336,13 @@ class TextTranslator:
         for attempt in range(max_retries):
             try:
                 # Attempt translation
+                # Ensure translators package is imported and configured
+                _ensure_translators(self.region)
                 translated = ts.translate_text(
                     query_text=text,
                     translator=self.provider,
                     from_language=source_language,
-                    to_language=self.target_language
+                    to_language=self.target_language,
                 )
                 
                 # Ensure we return a string
@@ -314,11 +399,12 @@ class TextTranslator:
         
         try:
             self.total_translations += 1
+            _ensure_translators(self.region)
             translated = ts.translate_text(
                 query_text=chunk,
                 translator=self.provider,
                 from_language=source_language,
-                to_language=self.target_language
+                to_language=self.target_language,
             )
             
             if isinstance(translated, str):

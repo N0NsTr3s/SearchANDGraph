@@ -172,6 +172,19 @@ class OptionsDialog(QDialog):
         )
         form.addRow("Min relation confidence", self.nlp_min_relation_confidence_edit)
 
+        # Translator region selection (affects `translators` package region)
+        self.translator_region_edit = QComboBox()
+        for code in ("EN", "RO", "CN", "US", "DE", "FR", "RU"):
+            self.translator_region_edit.addItem(code)
+        try:
+            current_region = (settings.translator_region or "EN").upper()
+        except Exception:
+            current_region = "EN"
+        idx = self.translator_region_edit.findText(current_region)
+        if idx >= 0:
+            self.translator_region_edit.setCurrentIndex(idx)
+        form.addRow("Translator region", self.translator_region_edit)
+
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -271,4 +284,5 @@ class OptionsDialog(QDialog):
             headless=headless,
             enable_web_search=enable_web_search,
             download_pdfs=download_pdfs,
+            translator_region=(self.translator_region_edit.currentText() or "EN").strip().upper(),
         )

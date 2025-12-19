@@ -70,6 +70,8 @@ class UserSettings:
 
     preview_enabled: bool = False
     preview_interval_seconds: int = 2
+    # Preferred region for the translators package (e.g. EN, RO, CN)
+    translator_region: str = "EN"
 
     def __post_init__(self) -> None:
         if self.recent_files is None:
@@ -103,6 +105,7 @@ class UserSettings:
             enable_web_search=bool(data.get("enable_web_search", True)),
             download_pdfs=bool(data.get("download_pdfs", True)),
             last_logs_cleared=(None if data.get("last_logs_cleared") is None else int(data.get("last_logs_cleared"))),
+            translator_region=str(data.get("translator_region") or "EN"),
         )
 
     def to_dict(self) -> dict:
@@ -131,4 +134,5 @@ class UserSettings:
             "enable_web_search": bool(self.enable_web_search),
             "download_pdfs": bool(self.download_pdfs),
             "last_logs_cleared": None if self.last_logs_cleared is None else int(self.last_logs_cleared),
+            "translator_region": str(self.translator_region or "EN"),
         }
