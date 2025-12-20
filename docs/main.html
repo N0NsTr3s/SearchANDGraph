@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SearchANDGraph - Connect the Dots. Visualize the Web. Stay Private.</title>
+    <meta name="description" content="Free open-source OSINT desktop tool that turns search results into interactive knowledge graphs using local AI. No cloud, no API keys.">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #0a0a0f;
+            color: #e5e7eb;
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+        
+        .container {
+            max-width: 1280px;
+            margin: 0 auto;
+            padding: 0 1.5rem;
+        }
+        
+        /* Hero Section */
+        .hero {
+            position: relative;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            background-image: 
+                linear-gradient(rgba(102, 126, 234, 0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(102, 126, 234, 0.05) 1px, transparent 1px);
+            background-size: 50px 50px;
+        }
+        
+        .hero-content {
+            position: relative;
+            z-index: 10;
+            text-align: center;
+            padding: 5rem 0;
+            animation: fadeIn 1s ease-in;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(30px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            background: rgba(102, 126, 234, 0.1);
+            border: 1px solid rgba(102, 126, 234, 0.3);
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: #c4b5fd;
+            margin-bottom: 1.5rem;
+            backdrop-filter: blur(10px);
+        }
+        
+        h1 {
+            font-size: 4rem;
+            font-weight: 900;
+            line-height: 1.1;
+            margin-bottom: 1.5rem;
+        }
+        
+        .gradient-text {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .subtitle {
+            font-size: 1.5rem;
+            color: #9ca3af;
+            max-width: 56rem;
+            margin: 0 auto 3rem;
+            line-height: 1.6;
+        }
+        
+        .cta-button {
+            display: inline-block;
+            padding: 1.5rem 4rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            font-size: 1.5rem;
+            font-weight: 700;
+            border-radius: 0.75rem;
+            text-decoration: none;
+            box-shadow: 0 10px 40px rgba(102, 126, 234, 0.4);
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+            border: none;
+            cursor: pointer;
+        }
+        
+        .cta-button::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+            transition: left 0.5s;
+        }
+        
+        .cta-button:hover::before {
+            left: 100%;
+        }
+        
+        .cta-button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 15px 50px rgba(102, 126, 234, 0.6);
+        }
+        
+        .security-note {
+            font-size: 0.875rem;
+            color: #6b7280;
+            max-width: 28rem;
+            margin: 1.5rem auto 0;
+        }
+        
+        .security-note .warning {
+            color: #fbbf24;
+        }
+        
+        /* Animated Background Nodes */
+        .nodes {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+        }
+        
+        .node {
+            position: absolute;
+            border-radius: 50%;
+            animation: float 6s ease-in-out infinite;
+        }
+        
+        .node1 { top: 5rem; left: 2.5rem; width: 0.75rem; height: 0.75rem; background: #a855f7; opacity: 0.6; }
+        .node2 { top: 10rem; right: 5rem; width: 0.5rem; height: 0.5rem; background: #3b82f6; opacity: 0.7; animation-delay: 1s; }
+        .node3 { bottom: 10rem; left: 25%; width: 1rem; height: 1rem; background: #ec4899; opacity: 0.5; animation-delay: 2s; }
+        .node4 { top: 15rem; right: 33%; width: 0.5rem; height: 0.5rem; background: #6366f1; opacity: 0.6; animation-delay: 3s; }
+        
+        @keyframes float {
+            0%, 100% { transform: translateY(0px) translateX(0px); }
+            33% { transform: translateY(-20px) translateX(10px); }
+            66% { transform: translateY(-10px) translateX(-10px); }
+        }
+        
+        /* Mockup */
+        .mockup-container {
+            max-width: 72rem;
+            margin: 4rem auto 0;
+            perspective: 1000px;
+        }
+        
+        .mockup-img {
+            border-radius: 1rem;
+            overflow: hidden;
+            border: 1px solid rgba(102, 126, 234, 0.3);
+            box-shadow: 0 0 40px rgba(102, 126, 234, 0.3);
+            transform: rotateY(-5deg) rotateX(5deg);
+            transition: transform 0.5s ease;
+        }
+        
+        .mockup-container:hover .mockup-img {
+            transform: rotateY(0deg) rotateX(0deg) scale(1.02);
+        }
+        
+        .mockup-placeholder {
+            background: linear-gradient(135deg, #1f2937 0%, #111827 100%);
+            padding: 2rem;
+            aspect-ratio: 16/9;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+        }
+        
+        .mockup-placeholder svg {
+            width: 8rem;
+            height: 8rem;
+            color: #a855f7;
+            opacity: 0.5;
+            margin-bottom: 1rem;
+        }
+        
+        .mockup-placeholder p {
+            color: #6b7280;
+            font-size: 1.125rem;
+        }
+        
+        .mockup-placeholder small {
+            color: #4b5563;
+            font-size: 0.875rem;
+            margin-top: 0.5rem;
+        }
+        
+        /* Why Section */
+        .why-section {
+            padding: 6rem 0;
+            background: linear-gradient(to bottom, transparent, rgba(17, 24, 39, 0.3));
+        }
+        
+        .why-content {
+            max-width: 56rem;
+            margin: 0 auto;
+            text-align: center;
+        }
+        
+        h2 {
+            font-size: 3rem;
+            font-weight: 700;
+            margin-bottom: 2rem;
+        }
+        
+        .why-text {
+            text-align: left;
+            font-size: 1.125rem;
+            color: #d1d5db;
+            line-height: 1.8;
+        }
+        
+        .why-text p {
+            margin-bottom: 1.5rem;
+        }
+        
+        .why-text strong {
+            color: white;
+        }
+        
+        .privacy-highlight {
+            color: #c4b5fd;
+            font-weight: 600;
+        }
+        
+        /* Features Grid */
+        .features-section {
+            padding: 6rem 0;
+        }
+        
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 2rem;
+            max-width: 84rem;
+            margin: 0 auto;
+        }
+        
+        .feature-card {
+            background: linear-gradient(145deg, #1a1a2e 0%, #16162a 100%);
+            border: 1px solid rgba(102, 126, 234, 0.2);
+            border-radius: 1rem;
+            padding: 2rem;
+            transition: all 0.3s ease;
+        }
+        
+        .feature-card:hover {
+            border-color: rgba(102, 126, 234, 0.6);
+            transform: translateY(-8px);
+            box-shadow: 0 20px 40px rgba(102, 126, 234, 0.2);
+        }
+        
+        .feature-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+        }
+        
+        .feature-card h3 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: white;
+            margin-bottom: 1rem;
+        }
+        
+        .feature-card p {
+            color: #9ca3af;
+            line-height: 1.6;
+        }
+        
+        /* Technical Section */
+        .tech-section {
+            padding: 6rem 0;
+            background: linear-gradient(to bottom, rgba(17, 24, 39, 0.3), transparent);
+        }
+        
+        .tech-content {
+            max-width: 56rem;
+            margin: 0 auto;
+        }
+        
+        .tech-box {
+            background: rgba(17, 24, 39, 0.5);
+            border: 1px solid rgba(102, 126, 234, 0.2);
+            border-radius: 1rem;
+            padding: 2rem;
+            backdrop-filter: blur(10px);
+        }
+        
+        .tech-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 2rem;
+        }
+        
+        .tech-box h4 {
+            color: #c4b5fd;
+            font-weight: 600;
+            font-size: 1.125rem;
+            margin-bottom: 1rem;
+        }
+        
+        .tech-box ul {
+            list-style: none;
+        }
+        
+        .tech-box li {
+            color: #d1d5db;
+            margin-bottom: 0.75rem;
+            display: flex;
+            align-items: center;
+        }
+        
+        .tech-box li::before {
+            content: '▸';
+            color: #a855f7;
+            margin-right: 0.75rem;
+        }
+        
+        .tech-footer {
+            margin-top: 2rem;
+            padding-top: 2rem;
+            border-top: 1px solid rgba(102, 126, 234, 0.2);
+        }
+        
+        .github-link {
+            display: inline-flex;
+            align-items: center;
+            color: #c4b5fd;
+            text-decoration: none;
+            transition: color 0.3s ease;
+        }
+        
+        .github-link:hover {
+            color: #e9d5ff;
+        }
+        
+        .github-link svg {
+            width: 1.5rem;
+            height: 1.5rem;
+            margin-right: 0.5rem;
+        }
+        
+        /* Final CTA */
+        .final-cta {
+            padding: 8rem 0;
+            text-align: center;
+        }
+        
+        .final-cta h2 {
+            font-size: 3.75rem;
+            margin-bottom: 2rem;
+        }
+        
+        .cta-footer-text {
+            color: #6b7280;
+            font-size: 0.875rem;
+            margin-top: 1.5rem;
+        }
+        
+        /* Footer */
+        footer {
+            border-top: 1px solid #1f2937;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 3rem 0;
+        }
+        
+        .footer-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1.5rem;
+        }
+        
+        .footer-left {
+            color: #6b7280;
+        }
+        
+        .footer-right {
+            display: flex;
+            align-items: center;
+            gap: 2rem;
+            flex-wrap: wrap;
+        }
+        
+        .footer-link {
+            color: #c4b5fd;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            transition: color 0.3s ease;
+        }
+        
+        .footer-link:hover {
+            color: #e9d5ff;
+        }
+        
+        .footer-link svg {
+            width: 1.25rem;
+            height: 1.25rem;
+        }
+        
+        .footer-credit {
+            color: #6b7280;
+        }
+        
+        .footer-credit span {
+            color: #c4b5fd;
+            font-weight: 600;
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 2.5rem;
+            }
+            
+            .subtitle {
+                font-size: 1.125rem;
+            }
+            
+            .cta-button {
+                font-size: 1.25rem;
+                padding: 1.25rem 2.5rem;
+            }
+            
+            h2 {
+                font-size: 2.25rem;
+            }
+            
+            .final-cta h2 {
+                font-size: 2.5rem;
+            }
+            
+            .features-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .tech-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .footer-content {
+                flex-direction: column;
+                text-align: center;
+            }
+            
+            .footer-right {
+                flex-direction: column;
+            }
+        }
+        
+        @media (min-width: 769px) and (max-width: 1024px) {
+            h1 {
+                font-size: 3.5rem;
+            }
+            
+            .features-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="nodes">
+            <div class="node node1"></div>
+            <div class="node node2"></div>
+            <div class="node node3"></div>
+            <div class="node node4"></div>
+        </div>
+        
+        <div class="container">
+            <div class="hero-content">
+                <div class="badge">
+                    🔓 100% Free & Open Source
+                </div>
+                
+                <h1>
+                    Connect the <span class="gradient-text">Dots</span>.<br>
+                    Visualize the <span class="gradient-text">Web</span>.<br>
+                    Stay <span class="gradient-text">Private</span>.
+                </h1>
+                
+                <p class="subtitle">
+                    The all-in-one OSINT desktop tool that turns search results into interactive knowledge graphs using local AI. No cloud, no API keys, no compromises.
+                </p>
+                
+                <div>
+                    <a href="https://github.com/N0NsTr3s/SearchANDGraph/releases/latest/download/SearchANDGraphSetup.exe" class="cta-button">
+                        ⬇ Download for Windows
+                    </a>
+                    
+                    <p class="security-note">
+                        <span class="warning">⚠️ Security Note:</span> SearchANDGraph is open source and safe. 
+                        If Windows SmartScreen appears, click "More info" → "Run anyway"
+                    </p>
+                </div>
+                
+                <div class="mockup-container">
+                    <div class="mockup-img">
+                        <div class="mockup-placeholder">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"></path>
+                            </svg>
+                            <p>Interactive Knowledge Graph Visualization</p>
+                            <object data="./Graph_example.png" type="text/html" style="width:105%;height:100%;min-height:240px;border:0;border-radius:0.5rem;overflow:hidden;display:block;">
+                                <img src="https://raw.githubusercontent.com/N0NsTr3s/SearchANDGraph/main/docs/Graph_example.png" alt="Graph example" style="width:100%;height:auto;display:block;">
+                            </object>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+    
+    <!-- Why Section -->
+    <section class="why-section">
+        <div class="container">
+            <div class="why-content">
+                <h2>
+                    Why <span class="gradient-text">SearchANDGraph</span>?
+                </h2>
+                <div class="why-text">
+                    <p>
+                        Traditional web searching is flat and disconnected. You open dozens of tabs, copy-paste snippets, and lose track of how pieces connect. OSINT investigations require understanding relationships between entities, but search engines just give you lists.
+                    </p>
+                    <p>
+                        <strong>SearchANDGraph changes everything.</strong> It automatically searches, scrapes, and analyzes web content to create visual maps of information. See connections between people, organizations, locations, and events as an interactive graph—not scattered browser tabs.
+                    </p>
+                    <p class="privacy-highlight">
+                        🔒 Privacy First: Everything runs locally on your machine. No API keys, no cloud services, no data leaks. Your investigations stay yours.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+    
+    <!-- Features Grid -->
+    <section class="features-section">
+        <div class="container">
+            <h2 style="text-align: center;">
+                Powerful <span class="gradient-text">Features</span>
+            </h2>
+            
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">🕸️</div>
+                    <h3>Visual Knowledge Graphs</h3>
+                    <p>
+                        Turn unstructured text into interactive nodes and edges. Click, drag, and explore connections between entities visually.
+                    </p>
+                </div>
+                
+                <div class="feature-card">
+                    <div class="feature-icon">🤖</div>
+                    <h3>Local NLP Power</h3>
+                    <p>
+                        Built-in Named Entity Recognition runs on your CPU/GPU, not the cloud. Extract people, places, and organizations instantly.
+                    </p>
+                </div>
+                
+                <div class="feature-card">
+                    <div class="feature-icon">🔍</div>
+                    <h3>Deep Web Scraping</h3>
+                    <p>
+                        Automates searches across DuckDuckGo and Bing to find hidden connections. Scrape multiple sources simultaneously.
+                    </p>
+                </div>
+                
+                <div class="feature-card">
+                    <div class="feature-icon">📄</div>
+                    <h3>Document Analysis</h3>
+                    <p>
+                        Ingests PDFs and websites to extract tables and text automatically. Turn documents into structured data.
+                    </p>
+                </div>
+                
+                <div class="feature-card">
+                    <div class="feature-icon">💾</div>
+                    <h3>Export Ready</h3>
+                    <p>
+                        Export findings to HTML for further analysis. Integrate with your existing workflow.
+                    </p>
+                </div>
+                
+                <div class="feature-card">
+                    <div class="feature-icon">🛡️</div>
+                    <h3>Stealth Scraping</h3>
+                    <p>
+                        Uses advanced browser automation to avoid detection. Powered by nodriver for reliable, unblocked scraping.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+    
+    <!-- Technical Section -->
+    <section class="tech-section">
+        <div class="container">
+            <div class="tech-content">
+                <h2 style="text-align: center; margin-bottom: 3rem;">
+                    For the <span class="gradient-text">Geeks</span> 🤓
+                </h2>
+                
+                <div class="tech-box">
+                    <div class="tech-grid">
+                        <div>
+                            <h4>Built With</h4>
+                            <ul>
+                                <li>Python & PyQt for the desktop interface</li>
+                                <li>Spacy for NLP and entity extraction</li>
+                                <li>nodriver for stealthy web automation</li>
+                            </ul>
+                        </div>
+                        
+                        <div>
+                            <h4>Architecture</h4>
+                            <ul>
+                                <li>Fully local processing (no API calls)</li>
+                                <li>Graph database for entity relationships</li>
+                                <li>Multi-threaded scraping engine</li>
+                            </ul>
+                        </div>
+                    </div>
+                    
+                    <div class="tech-footer">
+                        <a href="https://github.com/N0NsTr3s/SearchANDGraph" target="_blank" class="github-link">
+                            <svg fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+                            </svg>
+                            View Source Code on GitHub →
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+    
+    <!-- Final CTA -->
+    <section class="final-cta">
+        <div class="container">
+            <h2>
+                Ready to <span class="gradient-text">Transform</span><br>Your Investigations?
+            </h2>
+            <a href="https://github.com/N0NsTr3s/SearchANDGraph/releases/latest/download/SearchANDGraphSetup.exe" class="cta-button">
+                ⬇ Download for Windows
+            </a>
+            <p class="cta-footer-text">Free Forever • No Account Required • Open Source</p>
+        </div>
+    </section>
+    
+    <!-- Footer -->
+    <footer>
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-left">
+                    © 2025 SearchANDGraph. Released under MIT License.
+                </div>
+                
+                <div class="footer-right">
+                    <a href="https://github.com/N0NsTr3s/SearchANDGraph" target="_blank" class="footer-link">
+                        <svg fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+                        </svg>
+                        GitHub Repository
+                    </a>
+                    
+                    <div class="footer-credit">
+                        Made by <span>N0NsTr3s</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </footer>
+</body>
+</html>
