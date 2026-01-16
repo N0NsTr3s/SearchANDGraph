@@ -31,8 +31,62 @@ LABEL_PRIORITY = {
     'WORK_OF_ART': 2,
     'PRODUCT': 2,
     'DATE': 1,
+    # OSINT identifiers
+    'EMAIL': 1,
+    'PHONE': 1,
+    'SOCIAL': 1,
+    'DOCUMENT': 1,
     'UNKNOWN': 0
 }
+
+
+_EMAIL_LIKE_RE = re.compile(r"(?i)^[a-z0-9._%+-]+@(?:[a-z0-9-]+\.)+[a-z]{2,}$")
+_SOCIAL_URL_HINTS = (
+    "linkedin.com/in/",
+    "linkedin.com/company/",
+    "twitter.com/",
+    "x.com/",
+    "facebook.com/",
+    "instagram.com/",
+    "github.com/",
+)
+
+_DATE_LIKE_RE = re.compile(
+    r"(?x)\b("
+    r"(?:19|20)\d{2}[-/.](?:0?[1-9]|1[0-2])[-/.](?:0?[1-9]|[12]\d|3[01])"
+    r"|(?:0?[1-9]|[12]\d|3[01])[-/.](?:0?[1-9]|1[0-2])[-/.](?:19|20)\d{2}"
+    r"|(?:19|20)\d{2}[-/.](?:0?[1-9]|1[0-2])"
+    r")\b"
+)
+
+
+def _is_contact_identifier(value: str) -> bool:
+    if not value:
+        return False
+    v = value.strip()
+    if not v:
+        return False
+    if _DATE_LIKE_RE.fullmatch(v) or _DATE_LIKE_RE.fullmatch(re.sub(r"\s+", "", v)):
+        return False
+    if _EMAIL_LIKE_RE.match(v):
+        return True
+    low = v.lower()
+    if low.startswith('http://') or low.startswith('https://'):
+        return any(h in low for h in _SOCIAL_URL_HINTS)
+    digits = sum(ch.isdigit() for ch in v)
+    if digits >= 7:
+        allowed = set("+0123456789 ()-./")
+        if all((ch.isdigit() or ch in allowed) for ch in v):
+            return True
+    return False
+
+
+def _normalize_contact_identifier(value: str) -> str:
+    v = value.strip()
+    if _EMAIL_LIKE_RE.match(v):
+        return v.lower()
+    # Remove common trailing punctuation.
+    return v.rstrip(".,;:")
 
 
 class KnowledgeGraph:
@@ -406,8 +460,15 @@ class KnowledgeGraph:
         
         for (source, target), reasons in relations.items():
             # STEP 1: Clean source and target entity names first
-            cleaned_source = clean_node_name(source)
-            cleaned_target = clean_node_name(target)
+            if _is_contact_identifier(source):
+                cleaned_source = _normalize_contact_identifier(source)
+            else:
+                cleaned_source = clean_node_name(source)
+
+            if _is_contact_identifier(target):
+                cleaned_target = _normalize_contact_identifier(target)
+            else:
+                cleaned_target = clean_node_name(target)
             
             # Skip if either entity is invalid (preposition, article, etc.)
             if not cleaned_source or not cleaned_target:
@@ -459,6 +520,17 @@ class KnowledgeGraph:
             
             # STEP 4: Deduplicate provenances
             provenances = deduplicate_provenances(provenances)
+
+            # Propagate evidence URL onto endpoint nodes so the UI can display
+            # per-node provenance, not just edge provenance.
+            try:
+                for prov in provenances:
+                    if not prov.source_url:
+                        continue
+                    self.graph.nodes[source_id].setdefault('provenance', set()).add(prov.source_url)
+                    self.graph.nodes[target_id].setdefault('provenance', set()).add(prov.source_url)
+            except Exception:
+                pass
             
             # Calculate average confidence from provenances
             confidences = [p.confidence for p in provenances if p.confidence is not None]

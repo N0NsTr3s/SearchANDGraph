@@ -10,6 +10,7 @@ import pickle
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 from typing import Dict, List, Tuple, Optional, Mapping, Sequence, Any
+from urllib.parse import urlparse
 try:
     from ..utils.config import NLPConfig, CacheConfig
     from ..utils.logger import setup_logger
@@ -19,6 +20,7 @@ except:
     from utils.logger import setup_logger
     from utils.translator import TextTranslator
 from processor.provenance import Provenance, migrate_legacy_reasons
+from processor.contact_extractor import build_contact_entities_and_relations
 import diskcache
 
 logger = setup_logger(__name__)
@@ -109,7 +111,12 @@ except ImportError as e:
 class NLPProcessor:
     """Handles NLP processing for entity and relation extraction."""
     
-    def __init__(self, config: NLPConfig, cache_config: Optional[CacheConfig] = None):
+    def __init__(
+        self,
+        config: NLPConfig,
+        cache_config: Optional[CacheConfig] = None,
+        trusted_sources: Optional[Sequence[str]] = None
+    ):
         """
         Initialize the NLP processor.
         
@@ -119,6 +126,31 @@ class NLPProcessor:
         """
         self.config = config
         self.cache_config = cache_config or CacheConfig()
+        self._trusted_domains: List[str] = []
+        try:
+            raw_trusted = list(trusted_sources or [])
+            seen = set()
+            for d in raw_trusted:
+                raw = str(d or "").strip().lower()
+                if not raw:
+                    continue
+                if "//" not in raw:
+                    raw = f"http://{raw}"
+                try:
+                    parsed = urlparse(raw)
+                    host = (parsed.netloc or "").lower().strip()
+                    if host.startswith("www."):
+                        host = host[4:]
+                    if not host:
+                        continue
+                except Exception:
+                    continue
+                if host in seen:
+                    continue
+                seen.add(host)
+                self._trusted_domains.append(host)
+        except Exception:
+            self._trusted_domains = []
         
         logger.info(f"Loading spaCy model: {config.spacy_model}")
         try:
@@ -186,7 +218,9 @@ class NLPProcessor:
                 logger.info(f"Entity linking enabled (threshold: {config.entity_linking_threshold})")
             
             if config.enable_relation_confidence:
-                self.confidence_scorer = RelationConfidenceScorer()
+                self.confidence_scorer = RelationConfidenceScorer(
+                    trusted_domains=list(trusted_sources or [])
+                )
                 logger.info(f"Relation confidence scoring enabled (min: {config.min_relation_confidence})")
         
         # Initialize relation classifier
@@ -502,6 +536,41 @@ class NLPProcessor:
                 logger.debug(f"Resolved {len(coref_map)} coreferences")
         
         # Remap relations to use deduplicated entity names
+        # Add explicit contact/identifier extraction (emails, phones, social URLs).
+        # This ensures OSINT-style identifiers are preserved as nodes and always
+        # carry evidence/provenance.
+        try:
+            validated_url = None
+            if source_url and source_url.strip():
+                url_lower = source_url.strip().lower()
+                if url_lower.startswith('http://') or url_lower.startswith('https://'):
+                    validated_url = source_url.strip()
+
+            if validated_url:
+                sentence_entities = []
+                for sent in doc.sents:
+                    sent_text = sent.text.strip()
+                    if not sent_text:
+                        continue
+                    ents = [(ent.text.strip(), ent.label_) for ent in sent.ents if ent.text.strip()]
+                    sentence_entities.append((sent_text, ents))
+
+                contact_entities, contact_relations = build_contact_entities_and_relations(
+                    processed_text,
+                    validated_url,
+                    sentence_entities=sentence_entities,
+                )
+
+                if contact_entities:
+                    entities.update(contact_entities)
+                if contact_relations:
+                    for k, provs in contact_relations.items():
+                        relations_raw.setdefault(k, []).extend(provs)
+            else:
+                logger.debug("Skipping contact extraction due to missing valid source URL")
+        except Exception as e:
+            logger.debug(f"Contact extraction failed: {e}")
+
         relations = self._remap_relations(relations_raw, entities)
         
         # 🔥 ENHANCEMENT: Apply confidence scoring and filtering
@@ -1722,13 +1791,20 @@ class NLPProcessor:
         if has_prep:
             confidence += 0.1
         
-        # 5. Source reliability factor
-        if source_url:
-            # Wikipedia and credible sources get a boost
-            if 'wikipedia.org' in source_url:
-                confidence += 0.1
-            elif any(domain in source_url for domain in ['.edu', '.gov', '.org']):
-                confidence += 0.05
+        # 5. Source reliability factor (only user-trusted domains)
+        if source_url and self._trusted_domains:
+            try:
+                parsed = urlparse(str(source_url))
+                host = (parsed.netloc or "").lower().strip()
+                if host.startswith("www."):
+                    host = host[4:]
+            except Exception:
+                host = ""
+
+            for domain in self._trusted_domains:
+                if host == domain or host.endswith(f".{domain}"):
+                    confidence += 0.1
+                    break
         
         # 6. Entity prominence (longer entities often more specific = more confident)
         avg_entity_length = (len(ent1.text) + len(ent2.text)) / 2

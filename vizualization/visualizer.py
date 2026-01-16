@@ -14,9 +14,10 @@ from urllib.parse import urlparse
 from bokeh.layouts import column, row
 from bokeh.io import save
 try:
-    from bokeh.events import DocumentReady
+    from bokeh.events import DocumentReady, Tap
 except Exception:  # pragma: no cover
     DocumentReady = None  # type: ignore[assignment]
+    Tap = None  # type: ignore[assignment]
 from bokeh.models import (
     Button, CheckboxGroup, ColumnDataSource, CustomJS, Div, 
     HoverTool, Range1d, RangeSlider, Select, Slider, TapTool, TextInput
@@ -1815,7 +1816,7 @@ class GraphVisualizer:
             height=520,
             sizing_mode="fixed"
         )
-        
+
         # Create invisible circles at edge midpoints for interaction
         edge_circles = plot.circle(
             'x', 'y',
@@ -1849,15 +1850,43 @@ class GraphVisualizer:
         plot.add_tools(hover)
         
         # Add tap/click functionality with JavaScript callback to pin items
-        tap_callback = CustomJS(args=dict(source=edge_source, div=pinned_div), code="""
-            const indices = source.selected.indices;
-            if (indices.length > 0) {
-                    const idx = indices[0];
-                    const start = source.data['start'][idx];
-                    const end = source.data['end'][idx];
-                    const startDisplay = source.data['start_display'][idx] || start;
-                    const endDisplay = source.data['end_display'][idx] || end;
-                    const reasons = source.data['reasons'][idx];
+        # Use Tap event (cb_obj.x/y) and hit-test nearest edge midpoint
+        tap_callback = CustomJS(args=dict(source=edge_source, div=pinned_div, x_range=plot.x_range, y_range=plot.y_range), code="""
+            if (!cb_obj || cb_obj.x === undefined || cb_obj.y === undefined) {
+                return;
+            }
+
+            const tapX = cb_obj.x;
+            const tapY = cb_obj.y;
+            const xs = source.data['x'] || [];
+            const ys = source.data['y'] || [];
+
+            let minDist = Infinity;
+            let minIdx = -1;
+            for (let i = 0; i < xs.length; i++) {
+                const dx = tapX - xs[i];
+                const dy = tapY - ys[i];
+                const d2 = dx * dx + dy * dy;
+                if (d2 < minDist) {
+                    minDist = d2;
+                    minIdx = i;
+                }
+            }
+
+            const spanX = Math.abs((x_range.end || 0) - (x_range.start || 0)) || 1.0;
+            const spanY = Math.abs((y_range.end || 0) - (y_range.start || 0)) || 1.0;
+            const threshold = 0.03 * Math.max(spanX, spanY);
+
+            if (minIdx < 0 || minDist > (threshold * threshold)) {
+                return;
+            }
+
+            const idx = minIdx;
+            const start = source.data['start'][idx];
+            const end = source.data['end'][idx];
+            const startDisplay = source.data['start_display'][idx] || start;
+            const endDisplay = source.data['end_display'][idx] || end;
+            const reasons = source.data['reasons'][idx];
 
                 // Create a stable key so repeated clicks don't create duplicates.
                 const rawKey = [String(start), String(end)].sort().join('||');
@@ -1994,11 +2023,13 @@ class GraphVisualizer:
                 st.items.unshift(item);
                 window.__kgPinnedState = st;
                 if (window.__kgPinnedRender) window.__kgPinnedRender();
-            }
         """)
         
-        tap_tool = TapTool(renderers=[edge_circles], callback=tap_callback)
+        tap_tool = TapTool(renderers=[edge_circles])
         plot.add_tools(tap_tool)
+
+        if Tap is not None:
+            plot.js_on_event(Tap, tap_callback)
         
         logger.info(f"Added interactive edges with hover tooltips and click-to-pin functionality")
         

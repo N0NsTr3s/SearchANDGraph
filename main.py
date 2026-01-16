@@ -224,6 +224,7 @@ async def main(
     viz_max_nodes: int | None = None,
     viz_min_edge_confidence: float | None = None,
     viz_remove_isolated_nodes: bool | None = None,
+    target_type: str | None = None,
     enable_phase2: bool | None = None,
     phase2_max_pages: int | None = None,
     phase2_concurrent_tabs: int | None = None,
@@ -232,6 +233,7 @@ async def main(
     downloads_prune_mode: str | None = None,
     web_search_max_pdf_downloads: int | None = None,
     web_search_min_relevance: float | None = None,
+    osint_max_queries: int | None = None,
     nlp_min_confidence: float | None = None,
     nlp_min_relation_confidence: float | None = None,
     ui_preview_dir: str | None = None,
@@ -291,6 +293,13 @@ async def main(
         config.crawler.web_search_max_pdf_downloads = web_search_max_pdf_downloads
     if web_search_min_relevance is not None:
         config.crawler.web_search_min_relevance = web_search_min_relevance
+
+    if osint_max_queries is not None:
+        config.crawler.osint_max_queries = osint_max_queries
+
+    # Target type for OSINT dork generation (person, company, org, institution, role, auto)
+    if target_type is not None:
+        config.crawler.target_type = str(target_type).lower().strip() or "auto"
 
     # UI preview directory (used to save per-tab screenshots for the desktop app)
     if ui_preview_dir is not None:
@@ -408,7 +417,11 @@ async def main(
             config.crawler.blacklisted_sources = blacklist_clean
 
     # Initialize NLP processor first so it can be passed into the crawler
-    nlp_processor = NLPProcessor(config.nlp, config.cache)
+    nlp_processor = NLPProcessor(
+        config.nlp,
+        config.cache,
+        trusted_sources=getattr(config.crawler, 'preferred_sources', None)
+    )
     crawler = WebCrawler(config.crawler, config.cache, web_searcher=None, nlp_processor=nlp_processor)
     
     # Initialize KnowledgeGraph with entity disambiguation if enabled
@@ -478,14 +491,21 @@ async def main(
         )
         crawler.set_web_searcher(searcher)
 
+        # Target type is used for OSINT dork queries in Phase 2 (Autonomous Search)
+        # Phase 1 uses simple keyword searches only
+        target_type = getattr(config.crawler, 'target_type', 'auto') or 'auto'
+        logger.info(f"Target type for Phase 2 OSINT dorks: {target_type}")
+
         # Run parallel searches for expanded query set (always includes base query)
         search_queries = sorted(
             expanded_query,
             key=lambda q: (0 if q == config.crawler.query else 1, q.lower())
         )
+
         search_results = []
         seen_urls = set()
 
+        # Execute regular search queries (no dorking in Phase 1)
         query_results_map = searcher.parallel_search(
             search_queries,
             max_results_per_query=config.crawler.web_search_max_results
@@ -799,12 +819,64 @@ async def main(
                         main_query = getattr(config.crawler, 'query', None) or ''
                         context_with_main_query = [main_query] + [name for name in neighbor_names if name.lower() != main_query.lower()]
 
-                        entity_context['related_entities'] = context_with_main_query[:5]
+                        entity_context['related_entities'] = context_with_main_query
                         logger.info(f"  Context for '{entity_name_for_search}': {entity_context['related_entities']}")
                     else:
                         # Node not found: use empty context and warn
                         logger.warning(f"High-value entity '{entity_name}' not present in knowledge graph. Using empty context for search.")
                         entity_context['related_entities'] = []
+
+                    # Provide an official-domain hint for OSINT cross-reference queries.
+                    try:
+                        from urllib.parse import urlparse
+
+                        start_url = str(getattr(config.crawler, 'start_url', '') or '').strip()
+                        if start_url:
+                            host = (urlparse(start_url).netloc or '').lower()
+                            if host.startswith('www.'):
+                                host = host[4:]
+                            if host:
+                                entity_context['official_domain'] = host
+                    except Exception:
+                        pass
+
+                    # Build related sites from gathered sources (visited URLs + graph provenance)
+                    try:
+                        from urllib.parse import urlparse
+
+                        def _extract_host(url: str) -> str | None:
+                            try:
+                                parsed = urlparse(url)
+                                host = (parsed.netloc or '').lower().strip()
+                                if host.startswith('www.'):
+                                    host = host[4:]
+                                return host or None
+                            except Exception:
+                                return None
+
+                        related_sites: set[str] = set()
+
+                        # From visited URLs
+                        for u in (visited_urls_normalized or set()):
+                            host = _extract_host(str(u))
+                            if host:
+                                related_sites.add(host)
+
+                        # From graph node provenance
+                        try:
+                            for _n, data in knowledge_graph.graph.nodes(data=True):
+                                prov = data.get('provenance')
+                                if isinstance(prov, (list, set, tuple)):
+                                    for u in prov:
+                                        host = _extract_host(str(u))
+                                        if host:
+                                            related_sites.add(host)
+                        except Exception:
+                            pass
+
+                        entity_context['related_sites'] = sorted(related_sites)
+                    except Exception:
+                        entity_context['related_sites'] = []
 
                     # Resolve QID -> human-readable display name for web search
                     try:

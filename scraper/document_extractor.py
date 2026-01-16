@@ -228,6 +228,58 @@ class DocumentExtractor:
         if not PDF_SUPPORT:
             logger.warning("PyPDF2 not available. Cannot extract PDF text.")
             return None
+
+    def extract_pdf_metadata(self, filepath: Path) -> Optional[Dict[str, str]]:
+        """Extract embedded PDF metadata fields (OSINT-relevant).
+
+        Returns a dict with keys like: author, title, producer, creator,
+        creation_date, mod_date.
+        """
+        if not PDF_SUPPORT:
+            return None
+
+        try:
+            with open(filepath, 'rb') as file:
+                pdf_reader = PyPDF2.PdfReader(file)
+                meta = getattr(pdf_reader, 'metadata', None)
+                if not meta:
+                    return None
+
+                def _get(key: str) -> Optional[str]:
+                    try:
+                        v = meta.get(key)
+                        if v is None:
+                            return None
+                        s = str(v).strip()
+                        return s or None
+                    except Exception:
+                        return None
+
+                out: Dict[str, str] = {}
+                author = _get('/Author')
+                title = _get('/Title')
+                producer = _get('/Producer')
+                creator = _get('/Creator')
+                creation_date = _get('/CreationDate')
+                mod_date = _get('/ModDate')
+
+                if author:
+                    out['author'] = author
+                if title:
+                    out['title'] = title
+                if producer:
+                    out['producer'] = producer
+                if creator:
+                    out['creator'] = creator
+                if creation_date:
+                    out['creation_date'] = creation_date
+                if mod_date:
+                    out['mod_date'] = mod_date
+
+                return out or None
+        except Exception as e:
+            logger.debug(f"PDF metadata extraction failed for {filepath}: {e}")
+            return None
         
         try:
             logger.info(f"Extracting text from PDF: {filepath}")
@@ -508,18 +560,18 @@ class DocumentExtractor:
         Returns:
             Tuple of (extracted_text, extracted_tables)
         """
-        text, tables, _path = await self.process_document_url_with_path(url, query_name=query_name)
+        text, tables, _path, _meta = await self.process_document_url_with_path(url, query_name=query_name)
         return text, tables
 
     async def process_document_url_with_path(
         self,
         url: str,
         query_name: Optional[str] = None
-    ) -> Tuple[Optional[str], Optional[List[List[List[str]]]], Optional[Path]]:
+    ) -> Tuple[Optional[str], Optional[List[List[List[str]]]], Optional[Path], Optional[Dict[str, str]]]:
         """Like process_document_url, but also returns the downloaded filepath."""
         filepath = await self.download_document(url, query_name)
         if not filepath:
-            return None, None, None
+            return None, None, None, None
         
         # Determine file type and extract accordingly
         ext = filepath.suffix.lower()
@@ -527,6 +579,7 @@ class DocumentExtractor:
         if ext == '.pdf':
             text = self.extract_text_from_pdf(filepath)
             tables = self.extract_tables_from_pdf(filepath)
+            meta = self.extract_pdf_metadata(filepath)
             
             # Append table text to main text
             if tables:
@@ -535,16 +588,23 @@ class DocumentExtractor:
                     text = f"{text}\n\n{table_text}"
                 else:
                     text = table_text
-            
-            return text, tables, filepath
+
+            # Append metadata as a small evidence-friendly block.
+            if meta:
+                meta_lines = []
+                for k, v in meta.items():
+                    meta_lines.append(f"{k}: {v}")
+                text = (text or "") + "\n\nPDF_METADATA:\n" + "\n".join(meta_lines)
+
+            return text, tables, filepath, meta
         
         elif ext in ['.png', '.jpg', '.jpeg', '.gif', '.bmp']:
             text = self.extract_text_from_image(filepath)
-            return text, None, filepath
+            return text, None, filepath, None
         
         else:
             logger.warning(f"Unsupported file type: {ext}")
-            return None, None, filepath
+            return None, None, filepath, None
     
     def cleanup_old_downloads(self, days_old: int = 7):
         """

@@ -74,6 +74,12 @@ class CrawlerConfig:
     phase2_concurrent_tabs: Optional[int] = None  # Override tab count for Phase 2 (defaults to concurrent_tabs)
     enable_phase2: bool = True  # Enable Phase 2 deep-dive searches and crawling
 
+    # OSINT target type for search query (dork) generation
+    # Values: "auto", "person", "company", "org", "institution", "role"
+    target_type: str = "auto"
+    # Optional cap for OSINT query generation (None or 0 = no limit)
+    osint_max_queries: Optional[int] = 10
+
     # Document handling
     document_min_relevance: float = 0.3  # Relevance threshold for keeping downloaded documents
     downloads_prune_irrelevant: bool = True  # Move/delete irrelevant downloaded documents

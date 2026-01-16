@@ -5,6 +5,24 @@ from pathlib import Path
 from typing import Optional
 
 
+# Target type constants for OSINT-style dork generation
+TARGET_TYPE_AUTO = "auto"
+TARGET_TYPE_PERSON = "person"
+TARGET_TYPE_COMPANY = "company"
+TARGET_TYPE_ORG = "org"
+TARGET_TYPE_INSTITUTION = "institution"
+TARGET_TYPE_ROLE = "role"
+
+TARGET_TYPES = (
+    TARGET_TYPE_AUTO,
+    TARGET_TYPE_PERSON,
+    TARGET_TYPE_COMPANY,
+    TARGET_TYPE_ORG,
+    TARGET_TYPE_INSTITUTION,
+    TARGET_TYPE_ROLE,
+)
+
+
 @dataclass(frozen=True)
 class ScanRequest:
     query: str
@@ -19,6 +37,7 @@ class ScanRequest:
     viz_max_nodes: Optional[int] = None
     viz_min_edge_confidence: Optional[float] = None
     viz_remove_isolated_nodes: Optional[bool] = None
+    target_type: str = TARGET_TYPE_AUTO
 
     enable_phase2: Optional[bool] = None
     phase2_max_pages: Optional[int] = None
@@ -29,6 +48,9 @@ class ScanRequest:
     downloads_prune_mode: Optional[str] = None
     web_search_max_pdf_downloads: Optional[int] = None
     web_search_min_relevance: Optional[float] = None
+
+    # Optional cap for OSINT query generation (None = no limit)
+    osint_max_queries: Optional[int] = None
 
     nlp_min_confidence: Optional[float] = None
     nlp_min_relation_confidence: Optional[float] = None
@@ -52,6 +74,8 @@ class UserSettings:
     headless: bool = True
     enable_web_search: bool = True
     download_pdfs: bool = True
+    # Target type for OSINT dork generation (auto, person, company, org, institution, role)
+    target_type: str = TARGET_TYPE_AUTO
     # Timestamp (epoch seconds) when logs were last cleared by the auto-clean task
     last_logs_cleared: Optional[int] = None
 
@@ -64,6 +88,9 @@ class UserSettings:
     downloads_prune_mode: Optional[str] = None
     web_search_max_pdf_downloads: Optional[int] = None
     web_search_min_relevance: Optional[float] = None
+
+    # Optional cap for OSINT query generation (None = no limit)
+    osint_max_queries: Optional[int] = None
 
     nlp_min_confidence: Optional[float] = None
     nlp_min_relation_confidence: Optional[float] = None
@@ -95,8 +122,10 @@ class UserSettings:
             downloads_prune_mode=data.get("downloads_prune_mode"),
             web_search_max_pdf_downloads=data.get("web_search_max_pdf_downloads"),
             web_search_min_relevance=data.get("web_search_min_relevance"),
+            osint_max_queries=data.get("osint_max_queries"),
             nlp_min_confidence=data.get("nlp_min_confidence"),
             nlp_min_relation_confidence=data.get("nlp_min_relation_confidence"),
+            target_type=str(data.get("target_type") or TARGET_TYPE_AUTO),
             preview_enabled=bool(data.get("preview_enabled", False)),
             preview_interval_seconds=int(data.get("preview_interval_seconds", 2) or 2),
             # source_priority may be a mapping or None
@@ -125,6 +154,7 @@ class UserSettings:
             "downloads_prune_mode": self.downloads_prune_mode,
             "web_search_max_pdf_downloads": self.web_search_max_pdf_downloads,
             "web_search_min_relevance": self.web_search_min_relevance,
+            "osint_max_queries": self.osint_max_queries,
             "nlp_min_confidence": self.nlp_min_confidence,
             "nlp_min_relation_confidence": self.nlp_min_relation_confidence,
             "preview_enabled": bool(self.preview_enabled),
@@ -135,4 +165,5 @@ class UserSettings:
             "download_pdfs": bool(self.download_pdfs),
             "last_logs_cleared": None if self.last_logs_cleared is None else int(self.last_logs_cleared),
             "translator_region": str(self.translator_region or "EN"),
+            "target_type": str(self.target_type or TARGET_TYPE_AUTO),
         }

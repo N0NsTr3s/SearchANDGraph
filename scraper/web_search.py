@@ -375,8 +375,7 @@ class WebSearcher:
             # For locations, search for information about the place
             return [
                 SearchQuery(
-                    query=f"{entity_name} information",
-                    site="wikipedia.org"
+                    query=f"{entity_name} information"
                 ),
                 SearchQuery(
                     query=f"{entity_name} news",
@@ -390,6 +389,55 @@ class WebSearcher:
         else:
             # Generic search
             return [SearchQuery(query=entity_name)]
+
+    def build_osint_queries(
+        self,
+        name: str,
+        target_type: str = "auto",
+        domain: Optional[str] = None,
+        context: Optional[str] = None,
+        max_queries: Optional[int] = 10
+    ) -> List[SearchQuery]:
+        """
+        Build comprehensive OSINT-style Google dork queries based on target type.
+        
+        Args:
+            name: Target name (person, company, etc.)
+            target_type: One of "person", "company", "org", "institution", "role", "auto"
+            domain: Optional domain for targeted searches (e.g., example.com)
+            context: Optional context (company name for person, org name for role, etc.)
+            max_queries: Optional max number of queries to return (empty/None = no limit)
+        
+        Returns:
+            List of SearchQuery objects optimized for OSINT discovery
+        """
+        queries = AdvancedSearchBuilder.create_osint_dorks_by_type(
+            name=name,
+            target_type=target_type,
+            domain=domain,
+            context=context
+        )
+        
+        # De-duplicate and limit
+        seen = set()
+        unique_queries: List[SearchQuery] = []
+        max_q: Optional[int] = None
+        try:
+            if max_queries is not None:
+                max_q = int(max_queries)
+        except Exception:
+            max_q = None
+
+        for q in queries:
+            built = q.build()
+            if built not in seen:
+                seen.add(built)
+                unique_queries.append(q)
+                if max_q and max_q > 0 and len(unique_queries) >= max_q:
+                    break
+        
+        logger.info(f"Built {len(unique_queries)} OSINT queries for '{name}' (type={target_type})")
+        return unique_queries
     
     def search_with_advanced_query(
         self,

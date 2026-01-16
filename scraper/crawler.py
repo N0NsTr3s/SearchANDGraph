@@ -14,6 +14,7 @@ import nodriver as uc
 import inspect
 import trafilatura
 from bs4 import BeautifulSoup
+import random
 try:
     from ..utils.config import CrawlerConfig, CacheConfig
     from ..utils.logger import setup_logger
@@ -68,6 +69,18 @@ class WebCrawler:
         self.blacklisted_sources_set: set[str] = set()
         self._preferred_boost: float = 1.5  # multiply relevance for preferred sources
 
+        # User-Agent rotation for CAPTCHA mitigation
+        self._user_agents: list[str] = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:118.0) Gecko/20100101 Firefox/118.0",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:119.0) Gecko/20100101 Firefox/119.0",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        ]
+        self._current_user_agent: str = self._user_agents[0]
+
         # UI preview (desktop app): save per-tab screenshots to a directory, if configured.
         self._ui_preview_dir: Path | None = None
         try:
@@ -89,6 +102,16 @@ class WebCrawler:
             self.preferred_sources_set = {self._normalize_source_token(s) for s in prefer if s}
         if isinstance(blacklist, (list, tuple)):
             self.blacklisted_sources_set = {self._normalize_source_token(s) for s in blacklist if s}
+
+        # Treat start_url's hostname as an implicit preferred (official) source.
+        try:
+            start_url = str(getattr(self.config, 'start_url', '') or '').strip()
+            if start_url:
+                host = self._url_to_hostname(start_url)
+                if host:
+                    self.preferred_sources_set.add(self._normalize_source_token(host))
+        except Exception:
+            pass
         
         # Initialize document extractor for PDFs and images
         from scraper.document_extractor import DocumentExtractor
@@ -107,6 +130,173 @@ class WebCrawler:
         else:
             self.cache = None
             logger.info("Disk cache disabled")
+
+    async def _random_delay(self, min_seconds: float = 0.5, max_seconds: float = 2.5) -> None:
+        """
+        Add a random delay between navigations to appear more human-like.
+        
+        Args:
+            min_seconds: Minimum delay in seconds
+            max_seconds: Maximum delay in seconds
+        """
+        import random
+        delay = random.uniform(min_seconds, max_seconds)
+        logger.debug(f"Random delay: {delay:.2f}s")
+        await asyncio.sleep(delay)
+
+    async def _with_timeout(self, coro, timeout_s: float, stage: str, url: str, default=None):
+        """Run a coroutine with timeout and log the stage if it stalls."""
+        try:
+            return await asyncio.wait_for(coro, timeout=timeout_s)
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout at stage='{stage}' after {timeout_s:.1f}s for {url}")
+            return default
+        except Exception as e:
+            logger.warning(f"Error at stage='{stage}' for {url}: {e}")
+            return default
+
+    async def _detect_captcha(self, tab) -> bool:
+        """
+        Detect if the current page shows a CAPTCHA or bot-detection challenge.
+        
+        Args:
+            tab: Browser tab to check
+            
+        Returns:
+            True if CAPTCHA detected, False otherwise
+        """
+        try:
+            # Check page content for common CAPTCHA indicators
+            captcha_indicators = await tab.evaluate('''() => {
+                const body = document.body ? document.body.innerText.toLowerCase() : '';
+                
+                // Common CAPTCHA text indicators
+                const textIndicators = [
+                    'unusual traffic',
+                    'are you a robot',
+                    'i\\'m not a robot',
+                    'verify you are human',
+                    'human verification',
+                    'captcha',
+                    'recaptcha',
+                    'please verify',
+                    'automated queries',
+                    'suspected automated',
+                    'too many requests',
+                    'rate limit',
+                    'access denied',
+                    'blocked'
+                ];
+                
+                for (const indicator of textIndicators) {
+                    if (body.includes(indicator)) {
+                        return {detected: true, reason: indicator};
+                    }
+                }
+                
+                // Check for reCAPTCHA iframe or elements
+                const recaptchaFrame = document.querySelector('iframe[src*="recaptcha"]');
+                const recaptchaDiv = document.querySelector('.g-recaptcha, #recaptcha, [data-sitekey]');
+                const challengeFrame = document.querySelector('iframe[src*="challenge"]');
+                
+                if (recaptchaFrame || recaptchaDiv || challengeFrame) {
+                    return {detected: true, reason: 'recaptcha_element'};
+                }
+                
+                // Check if Google search results are missing but page loaded
+                const isGoogleSearch = window.location.hostname.includes('google');
+                const hasSearchResults = document.querySelector('#search, #rso, .g');
+                const hasErrorPage = document.querySelector('#infoDiv, .error-page');
+                
+                if (isGoogleSearch && !hasSearchResults && (hasErrorPage || body.length < 500)) {
+                    return {detected: true, reason: 'blocked_or_empty'};
+                }
+                
+                return {detected: false, reason: null};
+            }''')
+
+            # nodriver evaluate() can return dict-like, JSON string, or something else depending on backend.
+            if isinstance(captcha_indicators, str):
+                try:
+                    import json
+                    captcha_indicators = json.loads(captcha_indicators)
+                except Exception:
+                    captcha_indicators = None
+
+            if isinstance(captcha_indicators, dict) and captcha_indicators.get('detected'):
+                reason = captcha_indicators.get('reason', 'unknown')
+                logger.warning(f"CAPTCHA/block detected: {reason}")
+                return True
+
+        except Exception as e:
+            logger.debug(f"CAPTCHA detection check failed: {e}")
+        
+        return False
+
+    async def _reposition_window(self) -> bool:
+        """
+        Reposition and resize the browser window randomly to evade bot detection.
+        Called when CAPTCHA is detected.
+        
+        Returns:
+            True if repositioning succeeded, False otherwise
+        """
+        if not self.browser or self.config.browser_headless:
+            return False
+            
+        import random
+        
+        try:
+            # Get a tab to send CDP commands
+            main_tab = await self.browser.get("about:blank", new_tab=False)
+            if not main_tab:
+                return False
+
+            # Try to resolve the actual windowId via CDP (do not assume 0)
+            window_id = 0
+            try:
+                win_info = await main_tab.send(uc.cdp.browser.get_window_for_target())
+                if isinstance(win_info, dict) and isinstance(win_info.get('windowId'), int):
+                    window_id = win_info['windowId']
+            except Exception:
+                window_id = 0
+            
+            # Generate random position and size
+            # Position: random offset from 0,0 (stay within typical screen bounds)
+            left = random.randint(0, 400)
+            top = random.randint(0, 200)
+            # Size: vary between 1200-1800 width, 800-1000 height
+            width = random.randint(1200, 1800)
+            height = random.randint(800, 1000)
+            
+            logger.info(f"Repositioning browser window to ({left}, {top}) size {width}x{height} to evade CAPTCHA")
+            
+            # Prefer nodriver helpers over raw CDP (best-effort; API varies by backend)
+            try:
+                r = main_tab.set_window_size(left, top, width, height)  # type: ignore[attr-defined]
+                if inspect.isawaitable(r):
+                    await r
+            except Exception as e:
+                logger.warning(f"set_window_size() failed: {e}")
+                return False
+
+            # Move window too if supported (optional)
+            try:
+                if hasattr(main_tab, "set_window_position"):
+                    r = main_tab.set_window_position(left, top)  # type: ignore[attr-defined]
+                    if inspect.isawaitable(r):
+                        await r
+            except Exception as e:
+                logger.debug(f"set_window_position() not supported/failed: {e}")
+            # Wait a moment for the window to reposition
+            await asyncio.sleep(0.5)
+            
+            logger.info("Browser window repositioned successfully")
+            return True
+            
+        except Exception as e:
+            logger.warning(f"Failed to reposition browser window: {e}")
+            return False
 
     async def _send_to_processor(self, text: str, source_url: str | None = None) -> None:
         """
@@ -213,6 +403,29 @@ class WebCrawler:
                 return True
         return False
 
+    async def _apply_user_agent(self, tab) -> None:
+        """Apply current User-Agent override to a tab (best-effort)."""
+        if not tab:
+            return
+        try:
+            await tab.send(
+                uc.cdp.network.set_user_agent_override(user_agent=self._current_user_agent)
+            )
+            logger.info(f"Applied User-Agent override: {self._current_user_agent}")
+        except Exception as e:
+            logger.debug(f"Failed to apply User-Agent override: {e}")
+
+    def _rotate_user_agent(self) -> str:
+        """Rotate to a new User-Agent string."""
+        if not self._user_agents:
+            return self._current_user_agent
+        choices = [ua for ua in self._user_agents if ua != self._current_user_agent]
+        if not choices:
+            return self._current_user_agent
+        self._current_user_agent = random.choice(choices)
+        logger.info(f"Rotated User-Agent to: {self._current_user_agent}")
+        return self._current_user_agent
+
     def _is_preferred_url(self, url: str) -> bool:
         if not self.preferred_sources_set:
             return False
@@ -247,10 +460,35 @@ class WebCrawler:
             await tab.save_screenshot(str(out), format="jpeg", full_page=False)
         except Exception:
             return
+
     async def start(self):
-        """Start the browser instance."""
+        """Start the browser instance and maximize the window."""
+        import random
         logger.info("Starting browser...")
         self.browser = await uc.start(headless=self.config.browser_headless)
+
+        # Maximize browser window if not headless
+        if not self.config.browser_headless and self.browser:
+            try:
+                # Get the main tab and maximize the window
+                main_tab = await self.browser.get("about:blank", new_tab=False)
+                if main_tab:
+                    # Use CDP to maximize the window
+                    try:
+                        await main_tab.send(uc.cdp.browser.set_window_bounds(
+                            window_id=0,
+                            bounds=uc.cdp.browser.Bounds(window_state="maximized")
+                        ))
+                        logger.info("Browser window maximized")
+                    except Exception:
+                        # Fallback: try to set a large window size
+                        try:
+                            await main_tab.maximize()
+                            logger.info("Browser window set to maximize")
+                        except Exception as e:
+                            logger.debug(f"Could not set window size: {e}")
+            except Exception as e:
+                logger.debug(f"Could not maximize window: {e}")
         
     async def close(self):
         """Close the browser instance robustly.
@@ -311,13 +549,6 @@ class WebCrawler:
         """
         Performs a Google search using the browser and scrapes the results.
         Returns a list of (url, title, source) tuples.
-        
-        Args:
-            query: Search query string
-            max_results: Maximum number of results to return
-            
-        Returns:
-            List of (url, title, source) tuples
         """
         if not self.browser:
             # Try to start the browser automatically if it isn't running.
@@ -328,128 +559,191 @@ class WebCrawler:
                 logger.error(f"Failed to start browser for search_google(): {e}")
                 raise RuntimeError("Browser not started. Call start() before searching.") from e
 
-        from urllib.parse import quote_plus
-        
-        logger.info(f"Performing Google search in browser: '{query}'")
-        # Note: Google is sometimes slow/heavy and 'load' may never fire within a tight timeout.
-        # Prefer waiting for the results container and scraping via JS evaluation.
-        search_url = f"https://www.google.com/search?q={quote_plus(query)}"
-        
-        results = []
-        tab = None
-        try:
-            tab = await self.browser.get(search_url, new_tab=True)
+        from urllib.parse import quote_plus, urlparse, parse_qs
 
-            # Use a more forgiving wait strategy than full 'load'.
-            page_timeout = int(getattr(self.config, 'page_timeout', 30) or 30)
+        logger.info(f"Performing Google search in browser: '{query}'")
+        search_url = f"https://www.google.com/search?q={quote_plus(query)}"
+
+        results: list[tuple[str, str, str]] = []
+        tab = None
+        captcha_retried = False
+        try:
+            await self._random_delay(1.0, 3.0)
+            tab = await self.browser.get(search_url, new_tab=True)
+            await self._apply_user_agent(tab)
+
+            page_timeout = int(getattr(self.config, 'page_timeout', 45) or 45)
             try:
-                await tab.wait_for_selector('body', timeout=min(page_timeout, 15))
+                await tab.wait_for('body', timeout=min(page_timeout, 10))
             except Exception:
                 pass
 
-            # Wait for the main search results container if available.
+            await asyncio.sleep(2.0)
+
             try:
-                await tab.wait_for_selector('#search', timeout=page_timeout)
+                await tab.wait_for('#search', timeout=page_timeout)
             except Exception:
-                # Sometimes Google shows alternative layouts or blocks; continue and attempt scraping anyway.
                 logger.debug("Google results container '#search' not detected within timeout; proceeding to scrape")
 
-            # Try to dismiss common consent dialogs (Google cookie banners) if present
+            await asyncio.sleep(1.5)
+
+            if await self._detect_captcha(tab):
+                logger.warning("CAPTCHA detected on Google search page")
+                if not captcha_retried:
+                    captcha_retried = True
+                    await tab.close()
+                    tab = None
+                    await self._reposition_window()
+                    self._rotate_user_agent()
+                    await self._random_delay(5.0, 10.0)
+                    logger.info("Retrying search after CAPTCHA detection and window reposition...")
+                    tab = await self.browser.get(search_url, new_tab=True)
+                    await self._apply_user_agent(tab)
+                    await asyncio.sleep(3.0)
+
+                    if await self._detect_captcha(tab):
+                        logger.warning("CAPTCHA still present after retry; skipping this search")
+                        await tab.close()
+                        tab = None
+                        return results
+
+            # Try to dismiss common consent dialogs
             try:
-                # Common ids / selectors used by Google consent dialogs
                 for selector in ('#L2AGLb', 'button#L2AGLb', 'button[aria-label="Accept all"]', 'button[aria-label="I agree"]'):
-                    consent_btn = await tab.select_one(selector)
+                    consent_btn = await tab.select(selector=selector)
                     if consent_btn:
                         try:
                             await consent_btn.click()
-                            # Give the DOM a moment to update
-                            await asyncio.sleep(1)
+                            await asyncio.sleep(1.5)
                         except Exception:
                             pass
                         break
             except Exception:
                 pass
 
-            # Use a single-page JS evaluation to extract result links/titles to avoid
-            # working with potentially stale element handles (which can cause
-            # "Could not find node with given id" CDP errors when the DOM mutates).
-            script = '''() => {
-                const out = [];
-                const seen = new Set();
+            # --- NEW: nodriver-based scraping, no JS evaluate ---
 
-                function add(href, title) {
-                    if (!href || !title) return;
-                    if (!href.startsWith('http')) return;
-                    if (href.includes('google.com/search') || href.includes('accounts.google.com')) return;
-                    const key = href.toLowerCase().replace(/\/$/, '');
-                    if (seen.has(key)) return;
-                    seen.add(key);
-                    out.push({href, title});
-                }
+            # Prefer anchors inside Google results containers to avoid chrome/nav bloat.
+            candidate_selectors = [
+                '#rso a[href^="http"]',
+                '#search a[href^="http"]',
+                'a[href^="http"]',
+            ]
 
-                // Primary: standard results
-                const nodes = document.querySelectorAll('#search .g');
-                for (const node of nodes) {
-                    const a = node.querySelector('a');
-                    const h3 = node.querySelector('h3');
-                    if (a && h3) add(a.href, h3.innerText);
-                }
+            bad_hosts = {
+                'accounts.google.com', 'support.google.com', 'policies.google.com',
+                'myaccount.google.com', 'ads.google.com', 'maps.google.com',
+                'news.google.com', 'images.google.com', 'translate.google.com',
+                'webcache.googleusercontent.com', 'googleusercontent.com',
+            }
+            bad_prefixes = (
+                'https://www.google.com/search',
+                'https://google.com/search',
+                'https://accounts.google.com',
+            )
 
-                // Fallback: any h3 inside search anchors
-                if (out.length === 0) {
-                    const anchors = document.querySelectorAll('#search a');
-                    for (const a of anchors) {
-                        const h3 = a.querySelector('h3');
-                        if (h3) add(a.href, h3.innerText);
-                    }
-                }
-
-                // Last fallback: global h3 links
-                if (out.length === 0) {
-                    const anchors = document.querySelectorAll('a');
-                    for (const a of anchors) {
-                        const h3 = a.querySelector('h3');
-                        if (h3) add(a.href, h3.innerText);
-                    }
-                }
-
-                return out;
-            }'''
-
-            # Retry scraping a few times in case the DOM populates late.
-            last_eval_error = None
-            scraped = None
-            for attempt in range(3):
-                try:
-                    if attempt > 0:
-                        # Scroll a bit to trigger lazy-loading and give scripts time.
-                        try:
-                            await tab.evaluate('() => window.scrollTo(0, Math.max(200, document.body.scrollHeight * 0.25))')
-                        except Exception:
-                            pass
-                        await asyncio.sleep(1.5 * attempt)
-                    scraped = await tab.evaluate(script)
-                    if isinstance(scraped, list) and len(scraped) > 0:
-                        break
-                except Exception as e:
-                    last_eval_error = e
-                    await asyncio.sleep(1)
-
-            if isinstance(scraped, list):
-                for item in scraped:
+            def normalize_google_redirect(href: str) -> str:
+                if 'google.com/url?' in href:
                     try:
-                        href = item.get('href')
-                        title = item.get('title')
-                        if href and title:
-                            results.append((href, title, 'google'))
-                            if len(results) >= max_results:
-                                break
+                        qs = parse_qs(urlparse(href).query)
+                        actual = (qs.get('q') or qs.get('url') or [''])[0]
+                        if actual.startswith('http'):
+                            return actual
+                    except Exception:
+                        pass
+                return href
+
+            scraped: list[dict] = []
+            seen = set()
+            
+            for attempt in range(4):
+                if attempt > 0:
+                    try:
+                        await tab.evaluate('() => window.scrollTo(0, Math.max(200, document.body.scrollHeight * 0.25))')
+                    except Exception:
+                        pass
+                    await asyncio.sleep(2.0 + (1.0 * attempt))
+
+                anchors = []
+                for sel in candidate_selectors:
+                    try:
+                        anchors = await tab.select_all(sel)
+                    except Exception:
+                        anchors = []
+                    if anchors:
+                        break
+
+                if not anchors:
+                    logger.debug(f"Scrape attempt {attempt+1} found 0 anchors, retrying...")
+                    continue
+
+                for a in anchors:
+                    try:
+                        href = None
+                        if hasattr(a, 'attrs') and isinstance(a.attrs, dict):
+                            href = a.attrs.get('href')
+                        if not href and hasattr(a, 'get_attribute'):
+                            href = await a.get_attribute('href')  # type: ignore
+                        if not href or not href.startswith('http'):
+                            continue
+
+                        href = normalize_google_redirect(href)
+
+                        # Filter out Google chrome/navigation links
+                        if href.startswith(bad_prefixes):
+                            continue
+                        host = (urlparse(href).netloc or '').lower()
+                        if host in bad_hosts:
+                            continue
+
+                        title = ''
+                        if hasattr(a, 'text'):
+                            title = a.text if isinstance(a.text, str) else ''
+                        if not title and hasattr(a, 'text_content'):
+                            try:
+                                title = await a.text_content  # type: ignore
+                            except Exception:
+                                title = ''
+                        title = (title or '').strip()
+                        if not title or len(title) < 3:
+                            continue
+
+                        key = href.lower().rstrip('/')
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        scraped.append({'href': href, 'title': title})
                     except Exception:
                         continue
 
-            if not results and last_eval_error is not None:
-                logger.debug(f"Google scrape JS evaluation error: {last_eval_error}")
-                        
+                if scraped:
+                    logger.debug(f"Scrape attempt {attempt+1} collected {len(scraped)} results")
+                    break
+
+            if scraped:
+                logger.info(f"Google scraped {len(scraped)} raw results from page")
+                for item in scraped:
+                    href = item.get('href')
+                    title = item.get('title')
+                    if href and title:
+                        results.append((href, title, 'google'))
+                        if len(results) >= max_results:
+                            break
+            else:
+                try:
+                    debug_info = await tab.evaluate('''() => {
+                        return {
+                            hasSearch: !!document.querySelector('#search'),
+                            hasRso: !!document.querySelector('#rso'),
+                            h3Count: document.querySelectorAll('h3').length,
+                            anchorCount: document.querySelectorAll('a[href^="http"]').length,
+                            bodyLength: document.body ? document.body.innerText.length : 0
+                        };
+                    }''')
+                    logger.warning(f"Google scrape returned 0 results. Page debug: {debug_info}")
+                except Exception:
+                    logger.warning("Google scrape returned 0 results and debug failed")
+
         except Exception as e:
             logger.error(f"Browser-based Google search for '{query}' failed: {e}")
         finally:
@@ -457,13 +751,11 @@ class WebCrawler:
                 try:
                     await tab.close()
                 except Exception:
-                    pass  # Ignore errors on tab close
-        
-        # If Google failed or yielded no results, fall back to the non-browser WebSearcher (DDG/Bing).
+                    pass
+
         if not results and self.web_searcher is not None:
             logger.info("Google yielded no results; falling back to WebSearcher.search_multi()")
             try:
-                # WebSearcher is synchronous (requests); run it off the event loop.
                 fallback = await asyncio.to_thread(self.web_searcher.search_multi, query, max_results)
                 if isinstance(fallback, list):
                     for url, title, source in fallback[:max_results]:
@@ -746,7 +1038,7 @@ class WebCrawler:
                 (entity, count) for entity, count in sorted_entities
                 if entity.lower() not in query_lower
             ]
-        
+        logger.info(f"Top entities: {sorted_entities[:top_n]}")
         return sorted_entities[:top_n]
     
     async def fetch_page_content(self, url: str) -> Tuple[str, str]:
@@ -779,25 +1071,30 @@ class WebCrawler:
         
         logger.info(f"Fetching: {url}")
         
+        # Add random delay before navigation
+        await self._random_delay(0.5, 2.0)
         page = await self.browser.get(url)
         
-        # Wait for page to be fully loaded
-        await self._wait_for_page_load(page)
+        # Wait for page to be fully loaded (bounded)
+        page_timeout = int(getattr(self.config, 'page_timeout', 10) or 10)
+        await self._with_timeout(self._wait_for_page_load(page), page_timeout + 2, "wait_for_page_load", url)
         
-        # Check for 404 or error pages
-        is_error_page = await self._check_for_error_page(page)
+        # Check for 404 or error pages (bounded)
+        is_error_page = await self._with_timeout(self._check_for_error_page(page), 10, "check_for_error_page", url, default=False)
         if is_error_page:
             raise ValueError(f"Page not found or error page (404): {url}")
         
-        # Try to accept cookies
-        await self._accept_cookies(page)
+        # Try to accept cookies (bounded)
+        await self._with_timeout(self._accept_cookies(page), 8, "accept_cookies", url, default=False)
         await asyncio.sleep(0.5)  # Brief pause after cookie acceptance
         
-        # Remove any persistent overlays
-        await self._remove_persistent_overlays(page)
+        # Remove any persistent overlays (bounded)
+        await self._with_timeout(self._remove_persistent_overlays(page), 6, "remove_overlays", url, default=False)
         await asyncio.sleep(0.3)
         
-        html_content = await page.get_content()
+        html_content = await self._with_timeout(page.get_content(), 10, "get_content", url, default="")
+        if not html_content:
+            raise ValueError(f"No HTML content from {url}")
         
         # Extract main text content using trafilatura with better settings
         text_content = trafilatura.extract(
@@ -834,6 +1131,116 @@ class WebCrawler:
         
         # Apply additional block-level filtering
         text_content = self._filter_noisy_blocks(text_content)
+
+        # OSINT: extract explicit contact identifiers from the HTML so they
+        # survive boilerplate removal (e.g., mailto/tel/social links).
+        try:
+            contact_lines: list[str] = []
+            soup = BeautifulSoup(html_content, 'html.parser')
+            for a in soup.find_all('a', href=True):
+                href = str(a.get('href', '')).strip()
+                if not href:
+                    continue
+                low = href.lower()
+
+                if low.startswith('mailto:'):
+                    val = href.split(':', 1)[1].strip()
+                    if val:
+                        contact_lines.append(f"EMAIL: {val}")
+                    continue
+                if low.startswith('tel:'):
+                    val = href.split(':', 1)[1].strip()
+                    if val:
+                        contact_lines.append(f"PHONE: {val}")
+                    continue
+
+                if low.startswith('http://') or low.startswith('https://'):
+                    if any(x in low for x in (
+                        'linkedin.com/in/', 'linkedin.com/company/',
+                        'twitter.com/', 'x.com/', 'facebook.com/',
+                        'instagram.com/', 'github.com/',
+                    )):
+                        contact_lines.append(f"SOCIAL: {href}")
+
+            if contact_lines:
+                # De-dupe while preserving order
+                seen = set()
+                ordered = []
+                for line in contact_lines:
+                    if line in seen:
+                        continue
+                    seen.add(line)
+                    ordered.append(line)
+
+                text_content = f"{text_content}\n\nCONTACT_LINKS:\n" + "\n".join(ordered)
+
+            # OSINT: extract card-like team/leadership blocks.
+            # This is a lightweight heuristic to capture (Name, Title) pairs
+            # that trafilatura sometimes misses.
+            try:
+                url_low = url.lower()
+                is_teamish = any(k in url_low for k in (
+                    'about', 'team', 'leadership', 'management', 'board', 'investor', 'governance', 'contact'
+                ))
+
+                if is_teamish:
+                    blocks: list[str] = []
+                    selectors = [
+                        '[class*="team"]', '[class*="leadership"]', '[class*="management"]',
+                        '[class*="board"]', '[class*="profile"]', '[class*="member"]',
+                        '[class*="card"]'
+                    ]
+                    candidates = []
+                    for sel in selectors:
+                        try:
+                            candidates.extend(soup.select(sel))
+                        except Exception:
+                            continue
+
+                    seen_block = set()
+                    for node in candidates[:200]:
+                        try:
+                            # Extract a compact text payload
+                            name_el = node.find(['h1', 'h2', 'h3', 'h4'])
+                            if not name_el:
+                                continue
+                            name = ' '.join(name_el.get_text(' ', strip=True).split())
+                            if not name or len(name) < 3 or len(name) > 80:
+                                continue
+
+                            # Look for a nearby title/role
+                            role = None
+                            for el in node.find_all(['p', 'span', 'div'], limit=6):
+                                txt = ' '.join(el.get_text(' ', strip=True).split())
+                                if not txt:
+                                    continue
+                                low = txt.lower()
+                                if any(k in low for k in (
+                                    'ceo', 'cfo', 'cto', 'chief', 'officer', 'director', 'vp',
+                                    'president', 'founder', 'co-founder', 'chair', 'board',
+                                    'manager', 'head of', 'lead'
+                                )):
+                                    role = txt
+                                    break
+
+                            if role:
+                                line = f"{name} — {role}"
+                            else:
+                                line = name
+
+                            if line in seen_block:
+                                continue
+                            seen_block.add(line)
+                            blocks.append(line)
+                        except Exception:
+                            continue
+
+                    if blocks:
+                        text_content = f"{text_content}\n\nTEAM_CARDS:\n" + "\n".join(blocks[:80])
+            except Exception:
+                pass
+        except Exception:
+            pass
         
         # Cache the result
         try:
@@ -914,8 +1321,13 @@ class WebCrawler:
             if word_count > 0 and punct_count / word_count > 2:  # More than 2 punctuation per word
                 continue
             
-            # Skip blocks that look like URLs or email lists
-            if block_stripped.count('@') > 2 or block_stripped.count('http') > 3:
+            # Previously we dropped email/URL-heavy blocks as "noise".
+            # For an OSINT app, those blocks are often high-value (contacts).
+            # Only drop if it's overwhelmingly link/identifier spam.
+            at_count = block_stripped.count('@')
+            http_count = block_stripped.lower().count('http')
+            alpha = sum(ch.isalpha() for ch in block_stripped)
+            if (at_count > 10 or http_count > 10) and alpha < 30:
                 continue
             
             # Block passed all filters
@@ -1259,7 +1671,7 @@ class WebCrawler:
             logger.debug(f"Error checking for error page: {e}")
             return False  # If check fails, assume page is OK
     
-    async def _wait_for_page_load(self, page: uc.Tab, timeout: int = 20) -> bool:
+    async def _wait_for_page_load(self, page: uc.Tab, timeout: int = 10) -> bool:
         """
         Wait for page to be fully loaded before collecting data.
         Uses multiple strategies to ensure content is ready.
@@ -1281,7 +1693,7 @@ class WebCrawler:
             # Use the browser's built-in waiting mechanism. Convert timeout to milliseconds
             # since many browser APIs expect ms.
             try:
-                await page.wait_for_selector(content_selectors, timeout=timeout * 1000)
+                await page.wait_for(content_selectors, timeout=timeout * 1000)
                 logger.debug("Key content element found. Page content is likely rendered.")
             except Exception as e:
                 # Different browser backends raise different timeout exceptions; treat them
@@ -1289,7 +1701,7 @@ class WebCrawler:
                 if isinstance(e, asyncio.TimeoutError):
                     raise
                 # Some drivers raise their own TimeoutError subclasses; handle generically below
-                logger.debug(f"wait_for_selector raised: {e}")
+                logger.debug(f"wait_for raised: {e}")
 
             # Add a brief, final delay to allow lazy-loaded assets or trailing scripts
             # to complete after the main content is present.
@@ -1322,7 +1734,7 @@ class WebCrawler:
             # Accept button phrases (prioritized)
             accept_phrases = [
                 'accept all', 'accept cookies', 'allow all', 'agree and close',
-                'i agree', 'i accept', 'consent', 'agree', 'accept', 'allow',
+                'i agree', 'i accept', 'consent', 'agree', 'accept', 'allow', "accept toate"
                 'acceptă', 'acceptă toate', 'sunt de acord',  # Romanian
                 'acepto', 'aceptar todas',  # Spanish
                 'accetto', 'accetta tutti',  # Italian
@@ -1368,6 +1780,11 @@ class WebCrawler:
                 const rejectPhrases = {reject_json};
                 const closePhrases = {close_json};
                 const excludePhrases = {exclude_json};
+                const subscribePhrases = [
+                    'subscribe', 'newsletter', 'sign up', 'signup', 'get updates',
+                    'abonare', 'abonati', 'abonare la newsletter', 'inscriere', 'înregistrare',
+                    'subscribirse', 'suscríbete', 'abonnez', 'inscreva', 'registrieren'
+                ];
                 
                 let clickedSomething = false;
                 
@@ -1379,6 +1796,8 @@ class WebCrawler:
                         '[class*="modal-backdrop"]',
                         '[class*="popup-overlay"]',
                         '[id*="overlay"]',
+                        '[role="dialog"]',
+                        '[aria-modal="true"]',
                         'div[style*="position: fixed"][style*="z-index"]',
                         'div[style*="position:fixed"][style*="z-index"]'
                     ];
@@ -1396,6 +1815,21 @@ class WebCrawler:
                                     clickedSomething = true;
                                 }}
                             }});
+                        }} catch(e) {{ }}
+                    }}
+                }}
+
+                function removeSubscribeModals() {{
+                    const candidates = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"], div'));
+                    for (const el of candidates) {{
+                        try {{
+                            const text = (el.innerText || '').toLowerCase();
+                            if (!text) continue;
+                            if (subscribePhrases.some(p => text.includes(p))) {{
+                                el.remove();
+                                clickedSomething = true;
+                                console.log('Removed subscribe/newsletter modal');
+                            }}
                         }} catch(e) {{ }}
                     }}
                 }}
@@ -1526,6 +1960,9 @@ class WebCrawler:
                 
                 // 1. Remove blocking overlays
                 removeOverlays();
+
+                // 1b. Remove subscribe/newsletter modals (even if no close button)
+                removeSubscribeModals();
                 
                 // 2. Try to click ACCEPT buttons first (best for consent)
                 if (findAndClickButtons([acceptPhrases], 'ACCEPT')) {{
@@ -1551,6 +1988,20 @@ class WebCrawler:
                 if (tryIframes(closePhrases)) {{
                     return true;
                 }}
+
+                // 7. As a last resort, remove any large fixed dialog still blocking
+                try {{
+                    const fixeds = Array.from(document.querySelectorAll('[style*="position: fixed"], [style*="position:fixed"]'));
+                    const screenArea = window.innerWidth * window.innerHeight;
+                    for (const el of fixeds) {{
+                        const rect = el.getBoundingClientRect();
+                        const area = rect.width * rect.height;
+                        if (area > screenArea * 0.25) {{
+                            el.remove();
+                            clickedSomething = true;
+                        }}
+                    }}
+                }} catch(e) {{ }}
                 
                 return clickedSomething;
             }})()
@@ -1717,6 +2168,24 @@ class WebCrawler:
             # Parse URL
             parsed = urlparse(url_lower)
             path = parsed.path
+
+            # OSINT: strong boost for corporate “who runs this company” pages.
+            # Keep multilingual variants simple and high-signal.
+            corporate_keywords = {
+                'about', 'team', 'leadership', 'management', 'board', 'executive',
+                'investor', 'investors', 'governance', 'contact', 'contacts',
+                'company', 'corporate', 'people', 'our-team', 'leadership-team',
+                # Romanian (common)
+                'despre', 'echipa', 'conducere', 'management', 'contact',
+                # French/Spanish/German basics
+                'equipe', 'direction', 'contact', 'equipo', 'direccion', 'contacto',
+                'team', 'leitung', 'kontakt'
+            }
+            try:
+                if any(k in url_words_set for k in corporate_keywords):
+                    score += 2.5
+            except Exception:
+                pass
             
             # PRIORITY 1: Exact multi-word query match in URL (highest score)
             # Check if full query appears as connected words (e.g., "nicusor-dan" or "nicusor_dan")
@@ -1915,6 +2384,8 @@ class WebCrawler:
         try:
             # Create a new tab for this URL
             logger.debug(f"Creating new tab for: {url}")
+            # Add random delay before navigation
+            await self._random_delay(0.3, 1.2)
             tab = await self.browser.get(url, new_tab=True) # type: ignore
             logger.debug(f"Tab created, navigating to: {url}")
             
@@ -1975,38 +2446,31 @@ class WebCrawler:
             
             # Second fallback: BeautifulSoup extraction (better for dynamic sites)
             if not text_content:
-                logger.debug(f"Trafilatura extraction failed for {url}, trying BeautifulSoup...")
+                logger.debug(f"Trafilatura failed for {url}, trying BeautifulSoup extraction...")
                 try:
+                    from bs4 import BeautifulSoup
                     soup = BeautifulSoup(html_content, 'html.parser')
                     
-                    # Remove script and style elements
+                    # Remove script, style, nav, header, footer, aside elements
                     for element in soup(['script', 'style', 'nav', 'header', 'footer', 'aside']):
                         element.decompose()
                     
-                    # Get text from main content areas (prioritize article content)
-                    content_selectors = [
-                        'article',
-                        'main',
-                        '[role="main"]',
-                        '.article-content',
-                        '.post-content',
-                        '.entry-content',
-                        '.content',
-                        'body'
-                    ]
-                    
-                    for selector in content_selectors:
+                    # Try to find main content with common selectors (priority order)
+                    content_elem = None
+                    for selector in ['article', 'main', '[role="main"]', '.article-content', 
+                                   '.post-content', '.entry-content', '#content', '.content']:
                         content_elem = soup.select_one(selector)
                         if content_elem:
                             text_content = content_elem.get_text(separator=' ', strip=True)
-                            if text_content and len(text_content) > 200:
+                            if len(text_content) > 200:  # Only use if substantial content
                                 logger.debug(f"BeautifulSoup extracted {len(text_content)} chars using selector '{selector}'")
                                 break
                     
-                    # Fallback to full body text if selectors didn't work
-                    if not text_content:
-                        text_content = soup.get_text(separator=' ', strip=True)
-                        if text_content:
+                    # If no content found with selectors, try body
+                    if not text_content or len(text_content) < 200:
+                        body = soup.find('body')
+                        if body:
+                            text_content = body.get_text(separator=' ', strip=True)
                             logger.debug(f"BeautifulSoup extracted {len(text_content)} chars from full body")
                     
                 except Exception as e:
@@ -2021,7 +2485,7 @@ class WebCrawler:
                     text_content = re.sub(r'<script[^>]*>.*?</script>', '', text_content, flags=re.DOTALL | re.IGNORECASE)
                     text_content = re.sub(r'<style[^>]*>.*?</style>', '', text_content, flags=re.DOTALL | re.IGNORECASE)
                     text_content = re.sub(r'<[^>]+>', ' ', text_content)
-                    text_content = re.sub(r'\s+', ' ', text_content).strip()
+                    text_content = re.sub(r'\s+', ' ', text_content).strip();
                     
                     if text_content:
                         logger.debug(f"Regex extraction got {len(text_content)} chars")
@@ -2029,7 +2493,7 @@ class WebCrawler:
                     logger.warning(f"Regex text extraction also failed for {url}: {e}")
             
             # Lower threshold for content length (50 chars instead of 100)
-            min_content_length = 50
+            min_content_length = 50;
             
             if text_content and len(text_content.strip()) >= min_content_length:
                 logger.debug(f"Content extraction successful: {len(text_content.strip())} chars (min: {min_content_length})")
@@ -2042,6 +2506,12 @@ class WebCrawler:
             
             if text_content and len(text_content.strip()) >= min_content_length:
                 result['content'] = text_content
+                # Get the page title for combined relevance check
+                try:
+                    page_title = await tab.get_title()  # type: ignore[attr-defined]
+                except Exception:
+                    page_title = ''
+                
                 combined_text = f"{page_title}\n{text_content}" if page_title else text_content
                 
                 # Log what we're checking
@@ -2052,6 +2522,7 @@ class WebCrawler:
                 logger.debug(f"  Text preview ({len(combined_text)} chars): {text_preview}...")
                 logger.debug(f"  Query: {query}")
                 
+                # Check relevance with combined title + text
                 is_relevant, relevance_score, relevance_debug = self._quick_content_relevance(
                     combined_text,
                     query,
@@ -2076,35 +2547,20 @@ class WebCrawler:
 
                 for url_item in links_with_text:
                     try:
-                        url_candidate, link_text = url_item
-                    except Exception:
+                        link_url = url_item if isinstance(url_item, str) else url_item[0]
+                        link_text = url_item[1] if isinstance(url_item, tuple) and len(url_item) > 1 else ''
+                        link_lower = link_url.lower()
+                        text_lower = link_text.lower()
+                        
+                        # Check if link or link text contains query words
+                        if any(word in link_lower or word in text_lower for word in query_words):
+                            related_links.add(link_url)
+                    except Exception as e:
+                        logger.debug(f"Error processing link: {e}")
                         continue
-
-                    lower_url = url_candidate.lower()
-                    lower_text = (link_text or '').lower()
-
-                    # Match if query appears in link text
-                    if query and any(q in lower_text for q in query_words):
-                        related_links.add(url_candidate)
-                        continue
-
-                    # Match if query term appears in URL path
-                    if query and any(q in lower_url for q in query_words if len(q) > 2):
-                        related_links.add(url_candidate)
-                        continue
-                    
-                    # Match if any discovered entity appears in link text or URL
-                    if self._matches_any_entity(lower_text) or self._matches_any_entity(lower_url):
-                        related_links.add(url_candidate)
-                        logger.debug(f"    Entity match: {url_candidate}")
-                        continue
-
-                # Include contextual matches (only for query, not all links)
-                url_only_contextual = self._find_contextual_links(all_links_raw, url, query)
-                related_links.update(url_only_contextual)
-
-                # Combine all candidate links
-                all_candidate_links = set(query_exact_links) | set(related_links)
+                
+                # Combine sets and convert to list
+                all_candidate_links = list(set(query_exact_links) | related_links)
                 
                 # Store only related links in the graph (not all links)
                 result['all_links'] = list(all_candidate_links)
@@ -2113,12 +2569,6 @@ class WebCrawler:
                 logger.debug(f"  Found {len(query_exact_links)} exact matches, {len(related_links)} contextually related for {url}")
                 
                 result['success'] = True
-                # If relevant, send text to NLP processor to extract entities/relations
-                if bool(result.get('is_relevant')):
-                    try:
-                        await self._send_to_processor(combined_text, url)
-                    except Exception:
-                        logger.debug("Background NLP processing raised an exception")
             else:
                 logger.warning(f"No content extracted from {url}")
                 result['error'] = "No content extracted"
@@ -2277,7 +2727,7 @@ class WebCrawler:
         try:
             logger.info(f"Processing document: {url}")
 
-            text, tables, filepath = await self.document_extractor.process_document_url_with_path(
+            text, tables, filepath, _meta = await self.document_extractor.process_document_url_with_path(
                 url,
                 query_name=None,
             )
@@ -2372,6 +2822,8 @@ class WebCrawler:
                     continue
 
                 try:
+                    # Add small random delay between tab openings
+                    await self._random_delay(0.2, 0.8)
                     tab = await self.browser.get(url, new_tab=True)  # type: ignore
                     await asyncio.sleep(0.5)
                     tabs.append((url, tab))
@@ -2483,10 +2935,11 @@ class WebCrawler:
         
         try:
             # Wait for page to be fully loaded (tab was opened 1 second ago)
-            await self._wait_for_page_load(tab)
+            page_timeout = int(getattr(self.config, 'page_timeout', 10) or 10)
+            await self._with_timeout(self._wait_for_page_load(tab), page_timeout + 2, "wait_for_page_load", url)
 
             # Check for 404 or error pages before processing
-            is_error_page = await self._check_for_error_page(tab)
+            is_error_page = await self._with_timeout(self._check_for_error_page(tab), 10, "check_for_error_page", url, default=False)
             if is_error_page:
                 logger.warning(f"Skipping error page (404 or similar): {url}")
                 result['is_error_page'] = True
@@ -2494,17 +2947,21 @@ class WebCrawler:
                 return result
 
             # Attempt to accept cookie banners if present
-            cookie_clicked = await self._accept_cookies(tab)
+            cookie_clicked = await self._with_timeout(self._accept_cookies(tab), 8, "accept_cookies", url, default=False)
             if cookie_clicked:
                 await asyncio.sleep(0.5)
 
             # Remove any persistent overlays that might still be blocking content
-            await self._remove_persistent_overlays(tab)
+            await self._with_timeout(self._remove_persistent_overlays(tab), 6, "remove_overlays", url, default=False)
             await asyncio.sleep(0.3)  # Brief pause after overlay removal
 
             await self._maybe_save_ui_preview(tab)
 
-            html_content = await tab.get_content()
+            html_content = await self._with_timeout(tab.get_content(), 10, "get_content", url, default="")
+            if not html_content:
+                result['error'] = "No HTML content"
+                result['success'] = True
+                return result
             
             # DEBUG: Log HTML content length
             logger.debug(f"HTML content length for {url}: {len(html_content)} chars")
@@ -2573,7 +3030,7 @@ class WebCrawler:
                     text_content = re.sub(r'<script[^>]*>.*?</script>', '', text_content, flags=re.DOTALL | re.IGNORECASE)
                     text_content = re.sub(r'<style[^>]*>.*?</style>', '', text_content, flags=re.DOTALL | re.IGNORECASE)
                     text_content = re.sub(r'<[^>]+>', ' ', text_content)
-                    text_content = re.sub(r'\s+', ' ', text_content).strip()
+                    text_content = re.sub(r'\s+', ' ', text_content).strip();
                     
                     if text_content:
                         logger.debug(f"Regex extraction got {len(text_content)} chars")
@@ -2581,7 +3038,7 @@ class WebCrawler:
                     logger.warning(f"Regex text extraction also failed for {url}: {e}")
             
             # Lower threshold for content length (50 chars instead of 100)
-            min_content_length = 50
+            min_content_length = 50;
             
             if text_content and len(text_content.strip()) >= min_content_length:
                 logger.debug(f"Content extraction successful: {len(text_content.strip())} chars (min: {min_content_length})")
@@ -2594,7 +3051,7 @@ class WebCrawler:
             
             if text_content and len(text_content.strip()) >= min_content_length:
                 result['content'] = text_content
-                # Get page title for combined relevance check
+                # Get the page title for combined relevance check
                 try:
                     page_title = await tab.get_title()  # type: ignore[attr-defined]
                 except Exception:

@@ -32,7 +32,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtWebEngineCore import QWebEngineSettings
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 
-from ui.models import ScanRequest, UserSettings
+from ui.models import ScanRequest, UserSettings, TARGET_TYPES, TARGET_TYPE_AUTO
 from ui.options import OptionsDialog
 from ui.web import ExternalLinksPage
 from ui.worker import ScanWorker
@@ -76,6 +76,40 @@ class MainWindow(QMainWindow):
 
         self.start_url_input = QLineEdit()
         self.start_url_input.setPlaceholderText("Optional start URL (e.g., https://example.com)")
+
+        # Target type selector for OSINT dork generation
+        self.target_type_combo = QComboBox()
+        self.target_type_combo.setMinimumWidth(100)
+        # Add items with tooltips explaining each type
+        target_type_tooltips = {
+            "auto": "Automatically detect entity type from query and use mixed search strategies",
+            "person": "Search for individuals: emails, phones, social profiles, CVs, LinkedIn, staff directories",
+            "company": "Search for businesses: employee lists, financials, annual reports, press releases, leadership",
+            "org": "Search for organizations (non-profit, government): staff, contact info, public records, reports",
+            "institution": "Search for institutions (universities, hospitals): faculty, directories, publications",
+            "role": "Search for a role/position (e.g., 'CEO', 'Minister'): find who holds the position",
+        }
+        for tt in TARGET_TYPES:
+            self.target_type_combo.addItem(tt.capitalize(), tt)
+        # Set tooltip for the combo box itself
+        self.target_type_combo.setToolTip(
+            "Select the type of entity you're searching for.\n"
+            "This determines which Google dork patterns are used for OSINT discovery."
+        )
+        # Update tooltip when selection changes
+        def _update_target_type_tooltip(index: int) -> None:
+            tt = self.target_type_combo.itemData(index)
+            if tt and tt in target_type_tooltips:
+                self.target_type_combo.setToolTip(target_type_tooltips[tt])
+        self.target_type_combo.currentIndexChanged.connect(_update_target_type_tooltip)
+        # Set initial selection from settings
+        try:
+            initial_tt = (self._settings.target_type or TARGET_TYPE_AUTO).lower()
+            tt_idx = self.target_type_combo.findData(initial_tt)
+            if tt_idx >= 0:
+                self.target_type_combo.setCurrentIndex(tt_idx)
+        except Exception:
+            pass
 
         self.max_pages = QSpinBox()
         self.max_pages.setRange(1, 5000)
@@ -144,6 +178,8 @@ class MainWindow(QMainWindow):
         controls_layout.addWidget(self.query_input, 2)
         controls_layout.addWidget(QLabel("Start URL:"))
         controls_layout.addWidget(self.start_url_input, 2)
+        controls_layout.addWidget(QLabel("Type:"))
+        controls_layout.addWidget(self.target_type_combo)
         controls_layout.addWidget(QLabel("Max pages:"))
         controls_layout.addWidget(self.max_pages)
         controls_layout.addWidget(self.show_logs_checkbox)
@@ -458,9 +494,11 @@ class MainWindow(QMainWindow):
             viz_max_nodes=self._settings.viz_max_nodes,
             viz_min_edge_confidence=self._settings.viz_min_edge_confidence,
             viz_remove_isolated_nodes=self._settings.viz_remove_isolated_nodes,
+            target_type=str(self.target_type_combo.currentData() or "auto"),
             enable_phase2=self._settings.enable_phase2,
             phase2_max_pages=self._settings.phase2_max_pages,
             phase2_concurrent_tabs=self._settings.phase2_concurrent_tabs,
+            osint_max_queries=self._settings.osint_max_queries,
             document_min_relevance=self._settings.document_min_relevance,
             downloads_prune_irrelevant=self._settings.downloads_prune_irrelevant,
             downloads_prune_mode=self._settings.downloads_prune_mode,

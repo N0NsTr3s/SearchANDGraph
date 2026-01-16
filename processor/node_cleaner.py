@@ -12,6 +12,48 @@ except:
 logger = setup_logger(__name__)
 
 
+_EMAIL_LIKE_RE = re.compile(r"(?i)^[a-z0-9._%+-]+@(?:[a-z0-9-]+\.)+[a-z]{2,}$")
+_SOCIAL_URL_HINTS = (
+    "linkedin.com/in/",
+    "linkedin.com/company/",
+    "twitter.com/",
+    "x.com/",
+    "facebook.com/",
+    "instagram.com/",
+    "github.com/",
+)
+
+_DATE_LIKE_RE = re.compile(
+    r"(?x)\b("
+    r"(?:19|20)\d{2}[-/.](?:0?[1-9]|1[0-2])[-/.](?:0?[1-9]|[12]\d|3[01])"
+    r"|(?:0?[1-9]|[12]\d|3[01])[-/.](?:0?[1-9]|1[0-2])[-/.](?:19|20)\d{2}"
+    r"|(?:19|20)\d{2}[-/.](?:0?[1-9]|1[0-2])"
+    r")\b"
+)
+
+
+def _is_contact_identifier(value: str) -> bool:
+    if not value:
+        return False
+    v = value.strip()
+    if not v:
+        return False
+    if _DATE_LIKE_RE.fullmatch(v) or _DATE_LIKE_RE.fullmatch(re.sub(r"\s+", "", v)):
+        return False
+    if _EMAIL_LIKE_RE.match(v):
+        return True
+    low = v.lower()
+    if low.startswith("http://") or low.startswith("https://"):
+        return any(h in low for h in _SOCIAL_URL_HINTS)
+    # Phone-ish: >= 7 digits and mostly phone punctuation
+    digits = sum(ch.isdigit() for ch in v)
+    if digits >= 7:
+        allowed = set("+0123456789 ()-./")
+        if all((ch.isdigit() or ch in allowed) for ch in v):
+            return True
+    return False
+
+
 def normalize_to_ascii(text: str) -> str:
     """
     Convert all non-English characters to ASCII equivalents using unidecode.
@@ -239,6 +281,15 @@ def clean_node_name(name: str) -> str | None:
     """
     if not name:
         return None
+
+    # OSINT identifiers (emails/phones/social URLs) should not go through the
+    # normal entity-name cleaning pipeline.
+    if _is_contact_identifier(name):
+        v = name.strip()
+        if _EMAIL_LIKE_RE.match(v):
+            return v.lower()
+        # Strip common trailing punctuation for URLs/phones.
+        return v.rstrip(".,;:")
     
     original_name = name
     

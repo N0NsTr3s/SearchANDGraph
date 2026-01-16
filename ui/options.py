@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
 )
 
 from utils.config import CrawlerConfig, NLPConfig, VisualizationConfig
-from ui.models import UserSettings
+from ui.models import UserSettings, TARGET_TYPES, TARGET_TYPE_AUTO
 
 
 class OptionsDialog(QDialog):
@@ -185,6 +185,26 @@ class OptionsDialog(QDialog):
             self.translator_region_edit.setCurrentIndex(idx)
         form.addRow("Translator region", self.translator_region_edit)
 
+        # Target type for OSINT dork generation
+        self.target_type_edit = QComboBox()
+        for tt in TARGET_TYPES:
+            self.target_type_edit.addItem(tt.capitalize(), tt)
+        try:
+            current_tt = (settings.target_type or TARGET_TYPE_AUTO).lower()
+        except Exception:
+            current_tt = TARGET_TYPE_AUTO
+        tt_idx = self.target_type_edit.findData(current_tt)
+        if tt_idx >= 0:
+            self.target_type_edit.setCurrentIndex(tt_idx)
+        form.addRow("Target type", self.target_type_edit)
+
+        # Optional cap for OSINT query generation
+        self.osint_max_queries_edit = QLineEdit(
+            "" if settings.osint_max_queries is None else str(settings.osint_max_queries)
+        )
+        self.osint_max_queries_edit.setPlaceholderText("(empty = no limit)")
+        form.addRow("OSINT max queries", self.osint_max_queries_edit)
+
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -253,6 +273,10 @@ class OptionsDialog(QDialog):
         web_search_min_relevance: Optional[float]
         web_search_min_relevance = None if not web_min_rel_raw else float(web_min_rel_raw)
 
+        osint_max_raw = (self.osint_max_queries_edit.text() or "").strip()
+        osint_max_queries: Optional[int]
+        osint_max_queries = None if not osint_max_raw else int(osint_max_raw)
+
         nlp_min_conf_raw = (self.nlp_min_confidence_edit.text() or "").strip()
         nlp_min_confidence: Optional[float]
         nlp_min_confidence = None if not nlp_min_conf_raw else float(nlp_min_conf_raw)
@@ -279,10 +303,12 @@ class OptionsDialog(QDialog):
             downloads_prune_mode=downloads_prune_mode,
             web_search_max_pdf_downloads=web_search_max_pdf_downloads,
             web_search_min_relevance=web_search_min_relevance,
+            osint_max_queries=osint_max_queries,
             nlp_min_confidence=nlp_min_confidence,
             nlp_min_relation_confidence=nlp_min_relation_confidence,
             headless=headless,
             enable_web_search=enable_web_search,
             download_pdfs=download_pdfs,
             translator_region=(self.translator_region_edit.currentText() or "EN").strip().upper(),
+            target_type=(self.target_type_edit.currentData() or TARGET_TYPE_AUTO),
         )

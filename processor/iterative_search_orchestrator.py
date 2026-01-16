@@ -75,7 +75,7 @@ class IterativeSearchOrchestrator:
         crawler: 'WebCrawler',
         max_iterations: int = 3,
         max_results_per_query: int = 10,
-        min_relevance_score: float = 0.3
+        min_relevance_score: float = 0.1  # Relaxed threshold for OSINT dork queries
     ):
         """
         Initialize orchestrator.
@@ -242,23 +242,147 @@ class IterativeSearchOrchestrator:
                 scored.append((url, title, source, 1.0))
                 continue
 
-            # Require at least one token hit in the title to reduce noise.
+            # Count matches in title and URL
             title_matches = sum(1 for token in query_tokens if token in title_lower)
-            if title_matches == 0:
-                continue
-
             url_matches = sum(1 for token in query_tokens if token in url_lower)
+            
+            # With OSINT dork queries, results are already highly targeted
+            # Accept results even without title matches if URL matches
+            # or if query has few tokens (highly specific)
+            total_matches = title_matches + url_matches
+            
+            # Be very permissive: accept if ANY match found, or if query is very specific
+            if total_matches == 0 and len(query_tokens) > 2:
+                # Only skip if query has many tokens and zero matches
+                continue
 
             # Weight title matches higher than URL matches.
             weighted = (2.0 * title_matches) + (1.0 * url_matches)
-            score = weighted / max((2.0 * len(query_tokens)), 1.0)
+            # Use a more forgiving denominator
+            score = max(0.15, weighted / max((1.5 * len(query_tokens)), 1.0))
 
             if score >= self.min_relevance_score:
+                # Prefer official/preferred sources when crawler has a policy.
+                try:
+                    if hasattr(self.crawler, '_is_preferred_url') and self.crawler._is_preferred_url(url):
+                        score = min(1.0, score * 1.25)
+                except Exception:
+                    pass
                 scored.append((url, title, source, score))
         
         # Sort by score descending
         scored.sort(key=lambda x: x[3], reverse=True)
         return scored
+
+    def _generate_osint_crossref_queries(
+        self,
+        entity_name: str,
+        entity_type: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> List[SearchQuery]:
+        """Generate explicit OSINT-style cross-reference queries.
+
+        This complements the keyword-driven follow-ups with deterministic
+        high-signal queries using the full Google dork operator set.
+
+        Context may include:
+        - official_domain: str (e.g., company.com)
+        - related_entities: list[str]
+        - target_type: str (override for entity_type mapping)
+        """
+        et = (entity_type or '').upper().strip()
+        name = (entity_name or '').strip()
+        if not name:
+            return []
+
+        official_domain = None
+        try:
+            official_domain = (context or {}).get('official_domain')
+            if official_domain:
+                official_domain = str(official_domain).strip()
+        except Exception:
+            official_domain = None
+
+        related = []
+        try:
+            related = list((context or {}).get('related_entities') or [])
+        except Exception:
+            related = []
+
+        related_sites = []
+        try:
+            related_sites = list((context or {}).get('related_sites') or [])
+        except Exception:
+            related_sites = []
+
+        # Check for target_type override in context
+        target_type_override = None
+        try:
+            target_type_override = (context or {}).get('target_type')
+            if target_type_override:
+                target_type_override = str(target_type_override).lower().strip()
+        except Exception:
+            target_type_override = None
+
+        # Map entity_type to target_type if no override
+        if target_type_override and target_type_override != 'auto':
+            target_type = target_type_override
+        elif et == 'PERSON':
+            target_type = 'person'
+        elif et in {'ORG', 'COMPANY', 'ORGANIZATION'}:
+            target_type = 'company'
+        else:
+            target_type = 'auto'
+
+        # Use the comprehensive OSINT dork builder from AdvancedSearchBuilder
+        queries = self.builder.create_osint_dorks_by_type(
+            name=name,
+            target_type=target_type,
+            domain=official_domain,
+            context=related[0] if related else None
+        )
+
+        # Add context-aware dorks using related entities and related sites
+        try:
+            queries.extend(
+                self.builder.create_contextual_dorks(
+                    name=name,
+                    related_entities=related,
+                    related_sites=related_sites
+                )
+            )
+        except Exception:
+            pass
+
+        # Add role confirmation queries if we have related entities
+        if related and et == 'PERSON':
+            primary = str(related[0]).strip()
+            if primary and primary.lower() != name.lower():
+                queries.append(SearchQuery(query=f'"{name}" "{primary}" CEO OR CFO OR CTO OR director OR manager'))
+
+        # De-dupe by built query string and limit to avoid overwhelming search APIs
+        seen = set()
+        deduped: List[SearchQuery] = []
+        max_queries = None
+        try:
+            max_queries = getattr(self.crawler.config, 'osint_max_queries', None)
+            if max_queries is not None:
+                max_queries = int(max_queries)
+        except Exception:
+            max_queries = None
+        for q in queries:
+            try:
+                s = q.build()
+            except Exception:
+                s = str(q)
+            if s in seen:
+                continue
+            seen.add(s)
+            deduped.append(q)
+            if max_queries and max_queries > 0 and len(deduped) >= max_queries:
+                break
+
+        return deduped
     
     async def execute_iteration(
         self,
@@ -291,35 +415,45 @@ class IterativeSearchOrchestrator:
         except Exception as e:
             logger.warning(f"Failed to start crawler/browser before executing queries: {e}")
 
-        # Execute all queries
-        for i, query in enumerate(queries, 1):
+        # Execute all queries in parallel (bounded by semaphore)
+        async def _run_query(i: int, query: SearchQuery) -> List[Tuple[str, str, str, float]]:
             query_str = query.build()
             logger.info(f"Query {i}/{len(queries)}: {query_str}")
-            
+
+            # Jitter per task to reduce CAPTCHA triggers
             try:
-                # Use the crawler's browser-based search (throttled by semaphore)
+                import random
+                await asyncio.sleep(random.uniform(0.3, 1.2))
+            except Exception:
+                pass
+
+            try:
                 async with self._search_sem:
                     results = await self.crawler.search_google(
                         query_str,
                         max_results=self.max_results_per_query
                     )
-                
-                # Score and filter results
-                scored = self._filter_urls_by_relevance(
-                    results,
-                    query.query
-                )
-                
-                logger.info(f"  Found {len(scored)} relevant results")
-                
-                for url, title, source, score in scored:
-                    if url not in seen_urls and url not in self.all_discovered_urls:
-                        seen_urls.add(url)
-                        all_results.append((url, title, source, score))
-                
             except Exception as e:
                 logger.warning(f"  Query failed: {e}")
-                continue
+                return []
+
+            scored = self._filter_urls_by_relevance(
+                results,
+                query.query
+            )
+            logger.info(f"  Found {len(scored)} relevant results")
+            return scored
+
+        tasks = [
+            _run_query(i, query)
+            for i, query in enumerate(queries, 1)
+        ]
+
+        for scored in await asyncio.gather(*tasks, return_exceptions=False):
+            for url, title, source, score in scored:
+                if url not in seen_urls and url not in self.all_discovered_urls:
+                    seen_urls.add(url)
+                    all_results.append((url, title, source, score))
         
         # Extract new keywords from titles
         titles = [title for _, title, _, _ in all_results]
@@ -372,7 +506,15 @@ class IterativeSearchOrchestrator:
         queries = []
         
         # Combine base entity with new keywords
-        for keyword in list(new_keywords)[:5]:  # Top 5 keywords
+        max_queries = None
+        try:
+            max_queries = getattr(self.crawler.config, 'osint_max_queries', None)
+            if max_queries is not None:
+                max_queries = int(max_queries)
+        except Exception:
+            max_queries = None
+
+        for keyword in list(new_keywords):
             # Create targeted searches
             queries.append(SearchQuery(
                 query=f"{base_entity} {keyword}",
@@ -383,14 +525,20 @@ class IterativeSearchOrchestrator:
                 query=f"{base_entity} {keyword}",
                 intitle=keyword
             ))
+
+            if max_queries and max_queries > 0 and len(queries) >= max_queries:
+                break
         
         # If context available, use related entities
         if context and 'related_entities' in context:
-            for related_entity in context['related_entities'][:3]:
+            for related_entity in context['related_entities']:
                 queries.append(SearchQuery(
                     query=f"{base_entity} {related_entity}",
                     exact_phrases=[f"{base_entity} {related_entity}"]
                 ))
+
+                if max_queries and max_queries > 0 and len(queries) >= max_queries:
+                    break
         
         logger.info(f"Generated {len(queries)} follow-up queries from {len(new_keywords)} keywords")
         
@@ -448,19 +596,41 @@ class IterativeSearchOrchestrator:
         logger.info(f"Max iterations: {self.max_iterations}")
         logger.info("=" * 70)
         
-        # Iteration 1: Initial contextual search when possible
+        # Iteration 1: Explicit OSINT cross-reference + contextual search
         context_entities = context.get('related_entities', []) if context else []
 
+        crossref = self._generate_osint_crossref_queries(entity_name, entity_type, context=context)
+
         if context_entities:
-            initial_queries = self._generate_contextual_initial_queries(entity_name, entity_type, context_entities)
+            contextual = self._generate_contextual_initial_queries(entity_name, entity_type, context_entities)
         else:
-            # Fallback: Build simple queries when we don't have graph context
-            initial_queries = [
+            contextual = [
                 SearchQuery(query=f'"{entity_name}"'),
                 SearchQuery(query=f'"{entity_name}" profile OR biography'),
                 SearchQuery(query=f'"{entity_name}"', filetype="pdf")
             ]
-            logger.info(f"Generated {len(initial_queries)} basic initial queries for '{entity_name}'.")
+
+        # Combine, de-dupe, and keep iteration bounded if configured.
+        combined = crossref + contextual
+        seen_built = set()
+        initial_queries: List[SearchQuery] = []
+        max_initial = None
+        try:
+            max_initial = getattr(self.crawler.config, 'osint_max_queries', None)
+            if max_initial is not None:
+                max_initial = int(max_initial)
+        except Exception:
+            max_initial = None
+        for q in combined:
+            built = q.build()
+            if built in seen_built:
+                continue
+            seen_built.add(built)
+            initial_queries.append(q)
+            if max_initial and max_initial > 0 and len(initial_queries) >= max_initial:
+                break
+
+        logger.info(f"Generated {len(initial_queries)} initial queries for '{entity_name}' (cross-ref + contextual).")
 
         iteration_1 = await self.execute_iteration(
             initial_queries,

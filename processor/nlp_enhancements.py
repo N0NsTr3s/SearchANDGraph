@@ -6,6 +6,7 @@ import re
 import time
 import requests
 from typing import Dict, List, Tuple, Optional, Set
+from urllib.parse import urlparse
 from collections import defaultdict
 from requests.exceptions import RequestException, Timeout, ConnectionError
 
@@ -587,6 +588,33 @@ class RelationConfidenceScorer:
     """
     Enhanced confidence scoring for relations.
     """
+
+    def __init__(self, trusted_domains: Optional[List[str]] = None):
+        self.trusted_domains = self._normalize_domains(trusted_domains or [])
+
+    def _normalize_domains(self, domains: List[str]) -> List[str]:
+        normalized: List[str] = []
+        seen = set()
+        for d in domains:
+            raw = str(d or "").strip().lower()
+            if not raw:
+                continue
+            if "//" not in raw:
+                raw = f"http://{raw}"
+            try:
+                parsed = urlparse(raw)
+                host = (parsed.netloc or "").lower().strip()
+                if host.startswith("www."):
+                    host = host[4:]
+                if not host:
+                    continue
+            except Exception:
+                continue
+            if host in seen:
+                continue
+            seen.add(host)
+            normalized.append(host)
+        return normalized
     
     def calculate_confidence(
         self,
@@ -643,16 +671,19 @@ class RelationConfidenceScorer:
             score += 0.10  # Still give some points
         
         # 4. Source credibility (0-0.15)
-        if source_url:
-            credible_domains = [
-                'wikipedia.org', 'bbc.com', 'nytimes.com', 'reuters.com',
-                'apnews.com', 'theguardian.com', 'wsj.com', 'forbes.com',
-                'bloomberg.com', 'nature.com', 'science.org'
-            ]
-            if any(domain in source_url.lower() for domain in credible_domains):
-                score += 0.15
-            else:
-                score += 0.05
+        if source_url and self.trusted_domains:
+            try:
+                parsed = urlparse(str(source_url))
+                host = (parsed.netloc or "").lower().strip()
+                if host.startswith("www."):
+                    host = host[4:]
+            except Exception:
+                host = ""
+
+            for domain in self.trusted_domains:
+                if host == domain or host.endswith(f".{domain}"):
+                    score += 0.15
+                    break
         
         # 5. Relation type strength (0-0.10)
         if relation_type:
